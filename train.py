@@ -16,7 +16,6 @@ import torch
 
 import torch.nn as nn
 import torch.optim as optim
-import torchdp as tdp
 import tqdm
 import visdom
 import albumentations as a
@@ -55,7 +54,7 @@ from torchlib.utils import (
     calc_class_weights,
 )
 from sklearn.model_selection import train_test_split
-import segmentation_models as smp
+import segmentation_models_pytorch as smp
 
 
 def main(args, verbose=True, optuna_trial=None, cmd_args=None):

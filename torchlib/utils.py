@@ -10,7 +10,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 
-import segmentation_models as smp
+import segmentation_models_pytorch as smp
 
 import tqdm
 import albumentations as a
