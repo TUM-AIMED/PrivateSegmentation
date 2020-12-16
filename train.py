@@ -38,7 +38,7 @@ from torchlib.models import (
     resnet18,
     vgg16,
     simple_seg_net,  # Segmentation
-    monet_seg_net,
+    MoNet,
 )
 from torchlib.utils import (
     Arguments,
@@ -326,9 +326,9 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
         model_type = smp.Unet
         model_args = {"encoder_name": "resnet18", "classes": 1, "activation": "sigmoid"}
     elif args.model == "monet_seg_net":
-        model_type = monet_seg_net
+        model_type = MoNet
         # no params for now
-        model_args = {}
+        model_args = {"activation": "sigmoid"}
     else:
         raise ValueError(
             "Model name not understood. Please choose one of 'vgg16, 'simpleconv', resnet-18'."
