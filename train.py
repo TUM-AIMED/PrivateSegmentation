@@ -403,9 +403,9 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
         # stats for weighting from asmple 0.jpg in /train
         # white_pixels/ all_pixels = 0.0602 -> % of pos. classes
         # (256*256-a_np.sum())/a_np.sum() -> 15.598 times more negative classes
-        pos_weight = torch.tensor([15]).to(device)
-        loss_args = {"pos_weight": pos_weight}
-        # loss_args = {}
+        # pos_weight = torch.tensor([15]).to(device)
+        # loss_args = {"pos_weight" : pos_weight}
+        loss_args = {}
     else:
         loss_args = {"weight": cw, "reduction": "mean"}
     if args.mixup or (args.weight_classes and args.train_federated):
@@ -414,8 +414,8 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
         loss_fn = nn.CrossEntropyLoss
 
     if args.data_dir == "seg_data":
-        loss_fn = nn.BCEWithLogitsLoss
-        # loss_fn = smp.losses.DiceLoss
+        # loss_fn = nn.BCEWithLogitsLoss
+        loss_fn = smp.utils.losses.DiceLoss
 
     loss_fn = loss_fn(**loss_args)
 
