@@ -644,7 +644,8 @@ def setup_pysyft(args, hook, verbose=False):
 
             ## MSD dataset preprocessed version ##
             # PATH = "/Volumes/NWR/TUM-EI Studium/Master/DEA/03_semester/GR-PriMIA/Task03_Liver"
-            PATH = "/home/NiWaRe/PriMIA/Task03_Liver"
+            # PATH = "/home/NiWaRe/PriMIA/Task03_Liver"
+            PATH = args.data_dir
             dataset = MSD_data_images(PATH + "/train")
 
             lengths = [int(len(dataset) / len(workers)) for _ in workers]
@@ -701,8 +702,8 @@ def setup_pysyft(args, hook, verbose=False):
                 # For now only empty structure
 
                 dataset = seg_datasets[worker.id]
-                print(len(dataset))
-                print(dataset)
+                # print(len(dataset))
+                # print(dataset)
                 mean, std = calc_mean_std(dataset)
 
                 # TODO: For now no transforms necessary - possibly add later (same as in local training case)
@@ -886,7 +887,8 @@ def setup_pysyft(args, hook, verbose=False):
 
         ## MSD dataset
         # PATH = "/Volumes/NWR/TUM-EI Studium/Master/DEA/03_semester/GR-PriMIA/Task03_Liver"
-        PATH = "/home/NiWaRe/PriMIA/Task03_Liver"
+        # PATH = "/home/NiWaRe/PriMIA/Task03_Liver"
+        PATH = args.data_dir
         valset = MSD_data_images(PATH + "/val")
         pass
     else:
@@ -1265,6 +1267,8 @@ def secure_aggregation_epoch(
             # data, target = data.view(-1, 1, res, res).to(device), target.view(-1, res, res).to(device)
             data, target = data.to(device), target.to(device)
             pred = models[worker.id](data)
+            if args.data_dir == "seg_data":  # TODO do sth better
+                pred = pred.squeeze()
             loss = loss_fns[worker.id](pred, target)
             loss.backward()
             optimizers[worker.id].step()
@@ -1529,7 +1533,10 @@ def test(
             # if inpt_channels != 3:
             #     new_encoder = [nn.Conv2d(inpt_channels, 3, 1), model.encoder.conv1]
             #     model.encoder.conv1 = nn.Sequential(*new_encoder)
-            model = model.to(device)
+            if (
+                device if isinstance(device, str) else device.type
+            ) != "cpu":  # TODO ugly bugfix
+                model = model.to(device)
             output = model(data)
 
             # output = output.view_as(target)

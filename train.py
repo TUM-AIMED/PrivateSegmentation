@@ -168,15 +168,19 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
             ## MSD dataset preprocessed version ##
             # PATH = "/Volumes/NWR/TUM-EI Studium/Master/DEA/03_semester/GR-PriMIA/Task03_Liver"
             PATH = args.data_dir
-            dataset = MSD_data_images(PATH + "/train")
-            valset = MSD_data_images(PATH + "/val")
+            dataset = MSD_data_images(
+                PATH + "/train", target_transform=lambda x: x.squeeze()
+            )
+            valset = MSD_data_images(
+                PATH + "/val", target_transform=lambda x: x.squeeze()
+            )
 
             # For now only calculated for saving step below
             val_mean_std = calc_mean_std(dataset)
 
             # Overfit on small dataset
-            dataset = dataset[:1]
-            valset = dataset[:1]
+            # dataset = dataset[:1]
+            # valset = dataset[:1]
 
             # TODO: Potentially add transforms (possibly based on val_mean_calc as for the others)
 
