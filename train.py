@@ -176,7 +176,7 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
 
             # Overfit on small dataset
             dataset = dataset[:1]
-            valset = valset[:1]
+            valset = dataset[:1]
 
             # TODO: Potentially add transforms (possibly based on val_mean_calc as for the others)
 
@@ -322,6 +322,9 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
         model_type = simple_seg_net
         # no params for now
         model_args = {}
+    elif args.model == "unet":
+        model_type = smp.Unet
+        model_args = {"encoder_name": "resnet18", "classes": 1, "activation": "sigmoid"}
     elif args.model == "monet_seg_net":
         model_type = monet_seg_net
         # no params for now
@@ -330,14 +333,14 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
         raise ValueError(
             "Model name not understood. Please choose one of 'vgg16, 'simpleconv', resnet-18'."
         )
+    model = model_type(**model_args)
+    if args.model == "unet":
+        model.encoder.conv1 = nn.Sequential(nn.Conv2d(1, 3, 1), model.encoder.conv1)
     if args.train_federated:
-        model = model_type(**model_args)
         model = {
             key: model.copy()
             for key in [w.id for w in workers.values()] + ["local_model"]
         }
-    else:
-        model = model_type(**model_args)
 
     opt_kwargs = {"lr": args.lr, "weight_decay": args.weight_decay}
     if args.optimizer == "SGD":
