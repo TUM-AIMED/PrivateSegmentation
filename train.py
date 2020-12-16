@@ -29,15 +29,15 @@ from torchlib.dataloader import (
     random_split,
     create_albu_transform,
     CombinedLoader,
-    SegmentationData, # Segmentation 
-    MSD_data, 
+    SegmentationData,  # Segmentation
+    MSD_data,
     MSD_data_images,
 )  # pylint:disable=import-error
 from torchlib.models import (
     conv_at_resolution,  # pylint:disable=import-error
     resnet18,
     vgg16,
-    simple_seg_net, # Segmentation
+    simple_seg_net,  # Segmentation
     monet_seg_net,
 )
 from torchlib.utils import (
@@ -133,16 +133,16 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
                 dataset,
                 [int(ceil(total_L * (1.0 - fraction))), int(floor(total_L * fraction))],
             )
-        elif args.data_dir == "seg_data": 
+        elif args.data_dir == "seg_data":
 
-            # For now: - transforms fixed in datalaoder class (SegmentationData class), 
-            #          - train-val-split by different predfined datasets 
-            #          - fixed centralized data 
+            # For now: - transforms fixed in datalaoder class (SegmentationData class),
+            #          - train-val-split by different predfined datasets
+            #          - fixed centralized data
 
-            # Imagepath to the two the parent directory of the two label files 
-            ## MSRC dataset 
-            #dataset = SegmentationData(image_paths_file='data/segmentation_data/train.txt')
-            #valset = SegmentationData(image_paths_file='data/segmentation_data/val.txt')
+            # Imagepath to the two the parent directory of the two label files
+            ## MSRC dataset
+            # dataset = SegmentationData(image_paths_file='data/segmentation_data/train.txt')
+            # valset = SegmentationData(image_paths_file='data/segmentation_data/val.txt')
 
             ## MSD dataset
             """
@@ -166,15 +166,15 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
             dataset, valset = torch.utils.data.random_split(dataset, [train_size, val_size])
             """
             ## MSD dataset preprocessed version ##
-            #PATH = "/Volumes/NWR/TUM-EI Studium/Master/DEA/03_semester/GR-PriMIA/Task03_Liver"
-            PATH = "/home/NiWaRe/PriMIA/Task03_Liver"
-            dataset = MSD_data_images(PATH+'/train')
-            valset = MSD_data_images(PATH+'/val')
+            # PATH = "/Volumes/NWR/TUM-EI Studium/Master/DEA/03_semester/GR-PriMIA/Task03_Liver"
+            PATH = args.data_dir
+            dataset = MSD_data_images(PATH + "/train")
+            valset = MSD_data_images(PATH + "/val")
 
             # For now only calculated for saving step below
             val_mean_std = calc_mean_std(dataset)
 
-            # Overfit on small dataset 
+            # Overfit on small dataset
             dataset = dataset[:1]
             valset = valset[:1]
 
@@ -317,12 +317,12 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
             "input_size": args.inference_resolution,
             "pooling": args.pooling_type,
         }
-    # Segmentation 
+    # Segmentation
     elif args.model == "simple_seg_net":
         model_type = simple_seg_net
         # no params for now
         model_args = {}
-    elif args.model == "monet_seg_net": 
+    elif args.model == "monet_seg_net":
         model_type = monet_seg_net
         # no params for now
         model_args = {}
@@ -397,28 +397,28 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
 
     # Segmentation - we have to ignore the classes with label -1, they represent unlabeled data
     # Only for MSRC dataset
-    if args.data_dir == "seg_data": 
-        #loss_args = {"ignore_index":-1, "reduction":"mean"}
-        # reduction mean is set by defaut 
+    if args.data_dir == "seg_data":
+        # loss_args = {"ignore_index":-1, "reduction":"mean"}
+        # reduction mean is set by defaut
         # stats for weighting from asmple 0.jpg in /train
-        # white_pixels/ all_pixels = 0.0602 -> % of pos. classes 
+        # white_pixels/ all_pixels = 0.0602 -> % of pos. classes
         # (256*256-a_np.sum())/a_np.sum() -> 15.598 times more negative classes
         pos_weight = torch.tensor([15]).to(device)
-        loss_args = {"pos_weight" : pos_weight}
-        #loss_args = {}
-    else: 
+        loss_args = {"pos_weight": pos_weight}
+        # loss_args = {}
+    else:
         loss_args = {"weight": cw, "reduction": "mean"}
     if args.mixup or (args.weight_classes and args.train_federated):
         loss_fn = Cross_entropy_one_hot
     else:
         loss_fn = nn.CrossEntropyLoss
 
-    if args.data_dir == "seg_data": 
+    if args.data_dir == "seg_data":
         loss_fn = nn.BCEWithLogitsLoss
-        #loss_fn = smp.losses.DiceLoss
+        # loss_fn = smp.losses.DiceLoss
 
     loss_fn = loss_fn(**loss_args)
-    
+
     if args.train_federated:
         loss_fn = {w: loss_fn.copy() for w in [*workers, "local_model"]}
 
@@ -696,7 +696,7 @@ if __name__ == "__main__":
         if not args.train_federated:
             raise RuntimeError("WebSockets can only be used when in federated mode.")
     ## CUDA in FL ##
-    #if args.cuda and args.train_federated:
+    # if args.cuda and args.train_federated:
     #    warn(
     #        "CUDA is currently not supported by the backend. This option will be available at a later release",
     #        category=FutureWarning,
