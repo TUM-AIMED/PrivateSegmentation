@@ -738,17 +738,21 @@ def setup_pysyft(args, hook, verbose=False):
                     epsilon=args.dpsse_eps if args.DPSSE else None,
                 )
                 dataset.dataset.transform.transform.transforms.transforms.append(
-                        a.Compose(
+                    a.Compose(
                         [
-                                a.Normalize(mean, std, max_pixel_value=1.0),
-                                a.Lambda(
-                                    image=lambda x, **kwargs: x.reshape(
+                            a.Normalize(mean, std, max_pixel_value=1.0),
+                            a.Lambda(
+                                image=lambda x, **kwargs: x.reshape(
                                     # add extra channel to be compatible with nn.Conv2D
-                                    -1, args.train_resolution, args.train_resolution
+                                    -1,
+                                    args.train_resolution,
+                                    args.train_resolution,
                                 ),
-                                    mask=lambda x, **kwargs: np.where(
-                                    # binarize masks 
-                                    x.reshape(-1, args.train_resolution, args.train_resolution)
+                                mask=lambda x, **kwargs: np.where(
+                                    # binarize masks
+                                    x.reshape(
+                                        -1, args.train_resolution, args.train_resolution
+                                    )
                                     / 255.0
                                     > 0.5,
                                     np.ones_like(x),
@@ -1032,11 +1036,15 @@ def setup_pysyft(args, hook, verbose=False):
                         a.Lambda(
                             image=lambda x, **kwargs: x.reshape(
                                 # add extra channel to be compatible with nn.Conv2D
-                                -1, args.train_resolution, args.train_resolution
+                                -1,
+                                args.train_resolution,
+                                args.train_resolution,
                             ),
                             mask=lambda x, **kwargs: np.where(
-                                # binarize masks 
-                                x.reshape(-1, args.train_resolution, args.train_resolution)
+                                # binarize masks
+                                x.reshape(
+                                    -1, args.train_resolution, args.train_resolution
+                                )
                                 / 255.0
                                 > 0.5,
                                 np.ones_like(x),
@@ -1045,7 +1053,7 @@ def setup_pysyft(args, hook, verbose=False):
                         ),
                     ]
                 ),
-            )
+            ),
         )
     else:
 
@@ -1637,7 +1645,12 @@ def train(  # never called on websockets
     vis_params=None,
     verbose=True,
     gradient_dump=None,
+    alphas=None,
 ):
+
+    for param in model.parameters():
+        if param.requires_grad:
+            param.accumulated_grads = []
     model.train()
     if args.mixup:
         mixup = MixUp(λ=args.mixup_lambda, p=args.mixup_prob)
@@ -1646,27 +1659,109 @@ def train(  # never called on websockets
     L = len(train_loader)
     div = 1.0 / float(L)
     avg_loss = []
-    for batch_idx, (data, target) in tqdm.tqdm(
-        enumerate(train_loader),
-        leave=False,
-        desc="training epoch {:d}".format(epoch),
-        total=L + 1,
+    for batch_idx, (data, target) in (
+        tqdm.tqdm(
+            enumerate(train_loader),
+            leave=False,
+            desc="training epoch {:d}".format(epoch),
+            total=L + 1,
+        )
+        if verbose
+        else enumerate(train_loader)
     ):
         # TODO: Only for MSD without preprocessing
         # res = data.shape[-1]
         # data, target = data.view(-1, 1, res, res).to(device), target.view(-1, res, res).to(device)
         data, target = data.to(device), target.to(device)
+        if args.differentially_private and args.batch_size > args.microbatch_size:
+            for i in range(
+                0,
+                data.shape[0],
+                args.microbatch_size,
+            ):
+                d_i, t_i = (
+                    data[i : i + args.microbatch_size],
+                    target[i : i + args.microbatch_size],
+                )
 
-        if args.mixup:
+                output = model(d_i)
+                loss = loss_fn(output, t_i)
+                loss.backward()
+                with torch.no_grad():
+                    # torch internally checks if the parameter requires grad
+                    # and only clips the ones that do, so we don't need to check.
+                    # torch also clips by 'global norm', see https://arxiv.org/abs/1211.5063
+                    # clips inplace and detached from the computation graph
+                    torch.nn.utils.clip_grad_norm_(
+                        model.parameters(), args.max_grad_norm
+                    )
+                    # Since we are operating on microbatches in this case
+                    # we accumulate the clipped microbatch gradients into
+                    # a container to average them later
+                    # then we discard the original gradient for safety
+                    for param in model.parameters():
+                        if hasattr(param, "accumulated_grads"):
+                            param.accumulated_grads.append(param.grad.clone().detach())
+                            param.grad.zero_()
             with torch.no_grad():
-                target = oh_converter(target)
-                data, target = mixup((data, target))
-        optimizer.zero_grad()
-        output = model(data)
-        loss = loss_fn(output, target)
+                # at this point, we have the accumulated gradients
+                # and need to add noise calibrated by the norm
+                # larger microbatches get more noise
+                for param in model.parameters():
+                    if param.requires_grad:  # only parameters we clipped get noise
+                        noise = (
+                            torch.normal(
+                                0,
+                                args.noise_multiplier * args.max_grad_norm,
+                                size=param.grad.shape,
+                            )
+                            * (args.microbatch_size / args.batch_size)
+                        ).to(device)
+                        param.grad.add_(
+                            torch.mean(  # pylint:disable=no-member
+                                torch.stack(  # pylint:disable=no-member
+                                    param.accumulated_grads, dim=0
+                                ),
+                                dim=0,
+                            )
+                            + noise
+                        )
+                        param.accumulated_grads = (
+                            []
+                        )  # clean up the accumulated gradients
+        elif args.differentially_private and args.batch_size == args.microbatch_size:
 
-        loss.backward()
-        optimizer.step()
+            pred = model(data)
+            loss = loss_fn(pred, target)
+            loss.backward()
+            # here we are operating on the special case where the microbatch
+            # is the same size as the minibatch
+            # we don't need to accumulate gradients manually and can save one loop
+            # but the gradient gets much more noise to compensate
+            with torch.no_grad():
+                torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+                for param in model.parameters():
+                    noise = torch.normal(
+                        0,
+                        args.noise_multiplier * args.max_grad_norm,
+                        size=param.grad.shape,
+                    )  # no more scaling by microbatch size here
+                    param.grad.add_(noise)
+        else:
+            data, target = data.to(device), target.to(device)
+
+            if args.mixup:
+                with torch.no_grad():
+                    target = oh_converter(target)
+                    data, target = mixup((data, target))
+            optimizer.zero_grad()
+            output = model(data)
+            loss = loss_fn(output, target)
+
+            loss.backward()
+            optimizer.step()
+        if args.differentially_private:
+            model.total_dp_steps += 1
         if batch_idx % args.log_interval == 0:
             if args.visdom:
                 vis_params["vis"].line(
@@ -1686,12 +1781,32 @@ def train(  # never called on websockets
                     param.grad.detach() for param in model.parameters()
                 ]
     if args.differentially_private:
-        epsilon, best_alpha = optimizer.privacy_engine.get_privacy_spent(
-            args.target_delta
+        sample_size = len(train_loader.dataset)
+        if args.batch_size / sample_size > 1.0:
+            raise ValueError(
+                f"Batch size ({args.batch_size}) exceeds the dataset size ({sample_size}) on worker {worker.id}."
+                "This breaks privacy accounting."
+                "Please select a batch size that's at most equal to the dataset size on the worker."
+            )
+        epsilon, best_alpha = get_privacy_spent(
+            target_delta=args.target_delta,
+            steps=model.total_dp_steps,
+            alphas=alphas,
+            noise_multiplier=args.noise_multiplier,
+            sample_rate=args.batch_size / sample_size,
         )
-        print(f"(ε = {epsilon:.2f}, δ = {args.target_delta}) for α = {best_alpha}")
+        if verbose:
+            print(
+                f"(ε = {epsilon:.2f}, δ = {args.target_delta}) for α = {best_alpha} (Loss: {np.mean(avg_loss)}"
+            )
     else:
         epsilon = 0
+    #     epsilon, best_alpha = optimizer.privacy_engine.get_privacy_spent(
+    #         args.target_delta
+    #     )
+    #     print(f"(ε = {epsilon:.2f}, δ = {args.target_delta}) for α = {best_alpha}")
+    # else:
+    #     epsilon = 0
     if not args.visdom and verbose:
         print(
             "Train Epoch: {} \tLoss: {:.6f}".format(

@@ -61,6 +61,9 @@ from revision_scripts.module_modification import convert_batchnorm_modules
 from opacus import PrivacyEngine
 import pickle
 
+from syft.frameworks.torch.fl.dataloader import PoissonBatchSampler
+from torch.utils.data import SequentialSampler
+
 
 def main(args, verbose=True, optuna_trial=None, cmd_args=None):
 
@@ -209,7 +212,7 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
             # change transforms based on stats
             train_tf = create_albu_transform(args, mean, std)
 
-            # mask is a special keyword in albumentations 
+            # mask is a special keyword in albumentations
             dataset.transform = train_tf
             val_trans = a.Compose(
                 [
@@ -218,10 +221,12 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
                     a.Lambda(
                         image=lambda x, **kwargs: x.reshape(
                             # add extra channel to be compatible with nn.Conv2D
-                            -1, args.train_resolution, args.train_resolution
+                            -1,
+                            args.train_resolution,
+                            args.train_resolution,
                         ),
                         mask=lambda x, **kwargs: np.where(
-                            # binarize masks 
+                            # binarize masks
                             x.reshape(-1, args.train_resolution, args.train_resolution)
                             / 255.0
                             > 0.5,
@@ -283,13 +288,22 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
         #     dataset,
         #     [int(ceil(total_L * (1.0 - fraction))), int(floor(total_L * fraction))],
         # )
-        train_loader = torch.utils.data.DataLoader(
-            dataset,
-            batch_size=args.batch_size,
-            shuffle=True,
-            drop_last=args.differentially_private,
-            **kwargs,
-        )
+        if args.differentially_private:
+            sampler = SequentialSampler(range(len(dataset)))
+            batch_sampler = PoissonBatchSampler(sampler, args.batch_size, True)
+            train_loader = torch.utils.data.DataLoader(
+                dataset,
+                batch_sampler=batch_sampler,
+                # sampler=sampler,
+                **kwargs,
+            )
+        else:
+            train_loader = torch.utils.data.DataLoader(
+                dataset,
+                batch_size=args.batch_size,
+                shuffle=True,
+                **kwargs,
+            )
 
         # val_tf = [
         #     a.Resize(args.inference_resolution, args.inference_resolution),
@@ -489,15 +503,17 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
                     setattr(w, "total_dp_steps", 0)
         else:
             model = convert_batchnorm_modules(model)
-            privacy_engine = PrivacyEngine(
-                model,
-                batch_size=args.batch_size,  # recommended in opacus tutorial
-                sample_size=len(train_loader.dataset),
-                alphas=ALPHAS,
-                noise_multiplier=args.noise_multiplier,
-                max_grad_norm=args.max_grad_norm,
-            )
-            privacy_engine.attach(optimizer)
+            if not hasattr(model, "total_dp_steps"):
+                setattr(model, "total_dp_steps", 0)
+            # privacy_engine = PrivacyEngine(
+            #     model,
+            #     batch_size=args.batch_size,  # recommended in opacus tutorial
+            #     sample_size=len(train_loader.dataset),
+            #     alphas=ALPHAS,
+            #     noise_multiplier=args.noise_multiplier,
+            #     max_grad_norm=args.max_grad_norm,
+            # )
+            # privacy_engine.attach(optimizer)
 
     loss_args = {"weight": cw, "reduction": "mean"}
     if args.mixup or (args.weight_classes and args.train_federated):
@@ -670,6 +686,7 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
                 vis_params=vis_params,
                 verbose=verbose,
                 gradient_dump=gradient_dump,
+                alphas=ALPHAS,
             )
         # except Exception as e:
 
@@ -738,6 +755,19 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
             timestamp,
             args.save_file,
         )
+
+    _, matthews = test(
+        args,
+        model,
+        device,
+        val_loader,
+        args.epochs + 1,
+        loss_fn,
+        num_classes=num_classes,
+        vis_params=vis_params,
+        class_names=class_names,
+        verbose=True,
+    )
 
     # delete old model weights
     for model_file in model_paths:

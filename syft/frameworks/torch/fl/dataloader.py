@@ -193,7 +193,7 @@ class PoissonBatchSampler(torch.utils.data.Sampler):
                     )
                 ]
             np.random.shuffle(batch)
-            yield batch
+            yield batch.tolist()
 
     def __len__(self):
         if self.drop_last:
