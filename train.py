@@ -7,6 +7,7 @@ import random
 import shutil
 from datetime import datetime
 from warnings import warn
+from copy import deepcopy
 
 import numpy as np
 import syft as sy
@@ -65,7 +66,9 @@ from syft.frameworks.torch.fl.dataloader import PoissonBatchSampler
 from torch.utils.data import SequentialSampler
 
 
-def main(args, verbose=True, optuna_trial=None, cmd_args=None):
+def main(
+    args, verbose=True, optuna_trial=None, cmd_args=None, return_all_perfomances=False
+):
 
     use_cuda = args.cuda and torch.cuda.is_available()
     if args.deterministic and args.websockets:
@@ -623,6 +626,7 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
         verbose=verbose,
     )
     objectives = []
+    epsila = []
     model_paths = []
     """if args.train_federated:
         test_params = {
@@ -703,7 +707,7 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
         # except Exception as e:
 
         if (epoch % args.test_interval) == 0:
-            _, matthews = test(
+            _, objective = test(
                 args,
                 model["local_model"] if args.train_federated else model,
                 device,
@@ -726,7 +730,7 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
             )
             if optuna_trial:
                 optuna_trial.report(
-                    matthews,
+                    objective,
                     epoch
                     * (args.repetitions_dataset if args.repetitions_dataset else 1),
                 )
@@ -734,8 +738,11 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
                     raise TrialPruned()
 
             save_model(model, optimizer, model_path, args, epoch, val_mean_std)
-            objectives.append(matthews)
+            objectives.append(objective)
+            epsila.append(epsilon)
             model_paths.append(model_path)
+    if return_all_perfomances:
+        return_value = deepcopy(objectives), deepcopy(epsila)
     # reversal and formula because we want last occurance of highest value
     objectives = np.array(objectives)[::-1]
     best_score_idx = np.argmax(objectives)
@@ -745,7 +752,7 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
     ) * args.test_interval  # actually -1 but we're switching to 1 indexed here
     best_model_file = model_paths[highest_score]
     print(
-        "Highest matthews coefficient was {:.1f}% in epoch {:d}".format(
+        "Highest objective was {:.1f}% in epoch {:d}".format(
             objectives[best_score_idx],
             best_epoch * (args.repetitions_dataset if args.train_federated else 1),
         )
@@ -768,27 +775,17 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
             args.save_file,
         )
 
-    _, matthews = test(
-        args,
-        model,
-        device,
-        val_loader,
-        args.epochs + 1,
-        loss_fn,
-        num_classes=num_classes,
-        vis_params=vis_params,
-        class_names=class_names,
-        verbose=True,
-    )
-
     # delete old model weights
-    for model_file in model_paths:
-        remove(model_file)
+    if not return_all_perfomances:
+        for model_file in model_paths:
+            remove(model_file)
 
     if args.dump_gradients_every:
         torch.save(gradient_dump, f"model_weights/gradient_dump_{exp_name}.pt")
-
-    return objectives[best_score_idx], epsilon
+    if return_all_perfomances:
+        return return_value
+    else:
+        return objectives[best_score_idx], epsilon
 
 
 if __name__ == "__main__":

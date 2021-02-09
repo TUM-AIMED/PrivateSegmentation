@@ -3,6 +3,7 @@ from argparse import Namespace
 from random import uniform
 from warnings import warn
 from pandas import DataFrame
+from pathlib import Path
 
 sys.path.insert(0, os.path.split(sys.path[0])[0])
 
@@ -94,25 +95,29 @@ def ablation(noise_multiplier, max_grad_norm):
     #     args.DPSSE = False
     #     args.dpsse_eps = 1.0
     #     args.microbatch_size = args.batch_size
-    best_val_acc, epsilon = main(args, verbose=False)
+    objectives, epsila = main(args, verbose=False, return_all_perfomances=True)
     if epsilon < 1:
         warn(f"Epsilon is only {epsilon:.2f}. Seems very low.")
-    return best_val_acc, epsilon
+    return objectives, epsila
 
 
 if __name__ == "__main__":
-    DataFrame(
-        {"noise_multiplier": [], "max_grad_norm": [], "utility": [], "epsilon": []}
-    ).to_csv("ablation.csv")
+    if not Path("ablation.csv").is_file():
+        DataFrame(
+            {"noise_multiplier": [], "max_grad_norm": [], "utility": [], "epsilon": []}
+        ).to_csv(
+            "ablation.csv",
+        )
     for i in range(40):
         noise_multiplier = uniform(0.1, 1.0)
         max_grad_norm = uniform(0.1, 2.0)
-        utility, epsilon = ablation(noise_multiplier, max_grad_norm)
+        utilities, epsila = ablation(noise_multiplier, max_grad_norm)
+        assert len(utilities) == len(epsila)
         results = {
-            "noise_multiplier": [noise_multiplier],
-            "max_grad_norm": [max_grad_norm],
-            "utility": [utility],
-            "epsilon": [epsilon],
+            "noise_multiplier": [noise_multiplier] * len(utilities),
+            "max_grad_norm": [max_grad_norm] * len(utilities),
+            "utility": utilities,
+            "epsilon": epsila,
         }
         print(f"Results: {results}")
         DataFrame(results).to_csv("ablation.csv", mode="a", header=False)

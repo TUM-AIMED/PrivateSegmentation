@@ -1994,6 +1994,7 @@ def test(
     if args.bin_seg:
         if verbose:
             print(f"Dice score on test set: {(1.0 - test_loss)*100.0:.2f}%")
+        test_loss = test_loss.cpu().detach().item()
         return test_loss, 1.0 - test_loss
 
     if args.encrypted_inference:
