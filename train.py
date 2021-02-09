@@ -350,16 +350,28 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
             legend=["train_loss"],
         )
         vis.line(
-            X=np.zeros((1, 3)),
-            Y=np.zeros((1, 3)),
+            X=np.zeros((1, 2)),
+            Y=np.zeros((1, 2)),
             win="loss_win",
             opts={
-                "legend": ["train_loss", "val_loss", "matthews coeff"],
+                "legend": ["train_loss", "val_loss"],
                 "xlabel": "epochs",
-                "ylabel": "loss / m coeff [%]",
+                "ylabel": "loss",
             },
             env=vis_env,
         )
+        if not args.bin_seg:
+            vis.line(
+                X=np.zeros((1, 2)),
+                Y=np.zeros((1, 2)),
+                win="metrics_win",
+                opts={
+                    "legend": ["matthews coeff", "ROC AUC"],
+                    "xlabel": "epochs",
+                    "ylabel": "m coeff [%] / ROC AUC",
+                },
+                env=vis_env,
+            )
         vis.line(
             X=np.zeros((1, 1)),
             Y=np.zeros((1, 1)),
@@ -610,7 +622,7 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
         class_names=class_names,
         verbose=verbose,
     )
-    matthews_scores = []
+    objectives = []
     model_paths = []
     """if args.train_federated:
         test_params = {
@@ -722,19 +734,19 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
                     raise TrialPruned()
 
             save_model(model, optimizer, model_path, args, epoch, val_mean_std)
-            matthews_scores.append(matthews)
+            objectives.append(matthews)
             model_paths.append(model_path)
     # reversal and formula because we want last occurance of highest value
-    matthews_scores = np.array(matthews_scores)[::-1]
-    best_score_idx = np.argmax(matthews_scores)
-    highest_score = len(matthews_scores) - best_score_idx - 1
+    objectives = np.array(objectives)[::-1]
+    best_score_idx = np.argmax(objectives)
+    highest_score = len(objectives) - best_score_idx - 1
     best_epoch = (
         highest_score + 1
     ) * args.test_interval  # actually -1 but we're switching to 1 indexed here
     best_model_file = model_paths[highest_score]
     print(
         "Highest matthews coefficient was {:.1f}% in epoch {:d}".format(
-            matthews_scores[best_score_idx],
+            objectives[best_score_idx],
             best_epoch * (args.repetitions_dataset if args.train_federated else 1),
         )
     )
@@ -751,7 +763,7 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
     if args.save_file:
         save_config_results(
             args,
-            matthews_scores[best_score_idx],
+            objectives[best_score_idx],
             timestamp,
             args.save_file,
         )
@@ -776,7 +788,7 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
     if args.dump_gradients_every:
         torch.save(gradient_dump, f"model_weights/gradient_dump_{exp_name}.pt")
 
-    return matthews_scores[best_score_idx], epsilon
+    return objectives[best_score_idx], epsilon
 
 
 if __name__ == "__main__":

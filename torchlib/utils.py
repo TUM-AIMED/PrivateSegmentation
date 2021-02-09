@@ -1898,10 +1898,6 @@ def test(
     test_loss, TP = 0, 0
     total_pred, total_target, total_scores = [], [], []
 
-    # Segmentation - TEMPORARY
-    test_accs = []
-    test_dices = []
-
     with torch.no_grad():
         for data, target in (
             tqdm.tqdm(
@@ -1963,27 +1959,42 @@ def test(
                 # test_dices.append(test_dice)
 
                 # Make segmentation compatible with classification eval pipeline
-                output = output.view(-1)
-                total_scores.append(output)
-                target = target.view(-1)
-                # binary classification
-                pred = output.round().type(torch.LongTensor)
-                tgts = target.type(torch.LongTensor)
-                total_pred.append(pred)
-                total_target.append(tgts)
+                pass
+                # output = output.view(-1)
+                # total_scores.append(output)
+                # target = target.view(-1)
+                # # binary classification
+                # pred = output.round().type(torch.LongTensor)
+                # tgts = target.type(torch.LongTensor)
+                # total_pred.append(pred)
+                # total_target.append(tgts)
             else:
                 total_scores.append(output)
                 pred = output.argmax(dim=1)
                 tgts = target.view_as(pred)
                 total_pred.append(pred)
                 total_target.append(tgts)
-            equal = pred.eq(tgts)
-            TP += (
-                equal.sum().copy().get().float_precision().long().item()
-                if args.encrypted_inference
-                else equal.sum().item()
-            )
+
+                equal = pred.eq(tgts)
+                TP += (
+                    equal.sum().copy().get().float_precision().long().item()
+                    if args.encrypted_inference
+                    else equal.sum().item()
+                )
     test_loss /= len(val_loader)
+    if args.visdom and vis_params:
+        vis_params["vis"].line(
+            X=np.asarray([epoch]),
+            Y=np.asarray([test_loss.cpu().numpy()]),
+            win="loss_win",
+            name="val_loss",
+            update="append",
+            env=vis_params["vis_env"],
+        )
+    if args.bin_seg:
+        if verbose:
+            print(f"Dice score on test set: {(1.0 - test_loss)*100.0:.2f}%")
+        return test_loss, 1.0 - test_loss
 
     if args.encrypted_inference:
         objective = 100.0 * TP / (len(val_loader) * args.test_batch_size)
@@ -2007,65 +2018,71 @@ def test(
         # objective = np.mean(test_accs)
         # for now set objective to F1-score
         #    objective = np.mean(test_dices)
-        if True:  # TEMPORARY
-            total_pred = (
-                torch.cat(total_pred).cpu().numpy()
-            )  # pylint: disable=no-member
-            total_target = (
-                torch.cat(total_target).cpu().numpy()  # pylint: disable=no-member
-            )
-            total_scores = (
-                torch.cat(total_scores).cpu().numpy()  # pylint: disable=no-member
-            )
-            thresh = 1_000_000
-            if total_pred.shape[0] > thresh:
-                indices = torch.randperm(total_pred.shape[0])[:thresh]
-                total_pred = total_pred[indices]
-                total_target = total_target[indices]
-                total_scores = total_scores[indices]
+        report = 0
+        total_pred = torch.cat(total_pred).cpu().numpy()  # pylint: disable=no-member
+        total_target = (
+            torch.cat(total_target).cpu().numpy()  # pylint: disable=no-member
+        )
+        total_scores = (
+            torch.cat(total_scores).cpu().numpy()  # pylint: disable=no-member
+        )
+        # thresh = 1_000_000
+        # if total_pred.shape[0] > thresh:
+        #     indices = torch.randperm(total_pred.shape[0])[:thresh]
+        #     total_pred = total_pred[indices]
+        #     total_target = total_target[indices]
+        #     total_scores = total_scores[indices]
 
-            # TODO: the whole stats block until the print of the stats table takes around 40 sec.?
-            try:
-                roc_auc = mt.roc_auc_score(total_target, total_scores)
-                # roc_auc = mt.roc_auc_score(total_target, total_scores, multi_class="ovo")
-            except ValueError:
-                warn(
-                    "ROC AUC score could not be calculated and was set to zero.",
-                    category=UserWarning,
-                )
-                roc_auc = 0.0
+        # TODO: the whole stats block until the print of the stats table takes around 40 sec.?
+        try:
+            roc_auc = mt.roc_auc_score(total_target, total_scores)
+            # roc_auc = mt.roc_auc_score(total_target, total_scores, multi_class="ovo")
+        except ValueError:
+            warn(
+                "ROC AUC score could not be calculated and was set to zero.",
+                category=UserWarning,
+            )
+            roc_auc = 0.0
 
-            matthews_coeff = mt.matthews_corrcoef(total_target, total_pred)
-            objective = 100.0 * matthews_coeff
-            if verbose:
-                conf_matrix = mt.confusion_matrix(total_target, total_pred)
-                report = mt.classification_report(
-                    total_target, total_pred, output_dict=True, zero_division=0
+        matthews_coeff = mt.matthews_corrcoef(total_target, total_pred)
+        objective = 100.0 * matthews_coeff
+        if verbose:
+            conf_matrix = mt.confusion_matrix(total_target, total_pred)
+            report = mt.classification_report(
+                total_target, total_pred, output_dict=True, zero_division=0
+            )
+            print(
+                stats_table(
+                    conf_matrix,
+                    report,
+                    roc_auc=roc_auc,
+                    matthews_coeff=matthews_coeff,
+                    class_names=class_names,
+                    epoch=epoch,
                 )
-                print(
-                    stats_table(
-                        conf_matrix,
-                        report,
-                        roc_auc=roc_auc,
-                        matthews_coeff=matthews_coeff,
-                        class_names=class_names,
-                        epoch=epoch,
-                    )
-                )
+            )
         if args.visdom and vis_params:
             vis_params["vis"].line(
                 X=np.asarray([epoch]),
-                Y=np.asarray([test_loss]),
-                win="loss_win",
-                name="val_loss",
+                Y=np.asarray([objective / 100.0]),
+                win="metrics_win",
+                name="matthews coeff",
                 update="append",
                 env=vis_params["vis_env"],
             )
+            # vis_params["vis"].line(
+            #     X=np.asarray([epoch]),
+            #     Y=np.asarray([report["macro avg"]["f1-score"]]),
+            #     win="metrics_win",
+            #     name="dice",
+            #     update="append",
+            #     env=vis_params["vis_env"],
+            # )
             vis_params["vis"].line(
                 X=np.asarray([epoch]),
-                Y=np.asarray([objective / 100.0]),
-                win="loss_win",
-                name="matthews coeff",
+                Y=np.asarray([roc_auc]),
+                win="metrics_win",
+                name="ROC AUC",
                 update="append",
                 env=vis_params["vis_env"],
             )
