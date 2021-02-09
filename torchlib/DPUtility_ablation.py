@@ -74,7 +74,7 @@ def ablation(noise_multiplier, max_grad_norm):
 
     args.differentially_private = True
     args.microbatch_size = 1
-    args.target_delta = 1e-5
+    args.target_delta = 1.0 / 4000.0
     args.noise_multiplier = noise_multiplier
     args.max_grad_norm = max_grad_norm
 
@@ -104,9 +104,9 @@ if __name__ == "__main__":
     DataFrame(
         {"noise_multiplier": [], "max_grad_norm": [], "utility": [], "epsilon": []}
     ).to_csv("ablation.csv")
-    for i in range(10):
-        noise_multiplier = 1e-6  # uniform(0.1, 1.0)
-        max_grad_norm = 10  # uniform(0.1, 2.0)
+    for i in range(40):
+        noise_multiplier = uniform(0.1, 1.0)
+        max_grad_norm = uniform(0.1, 2.0)
         utility, epsilon = ablation(noise_multiplier, max_grad_norm)
         results = {
             "noise_multiplier": [noise_multiplier],

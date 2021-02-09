@@ -1759,7 +1759,7 @@ def train(  # never called on websockets
             loss = loss_fn(output, target)
 
             loss.backward()
-            optimizer.step()
+        optimizer.step()
         if args.differentially_private:
             model.total_dp_steps += 1
         if batch_idx % args.log_interval == 0:
@@ -1795,6 +1795,8 @@ def train(  # never called on websockets
             noise_multiplier=args.noise_multiplier,
             sample_rate=args.batch_size / sample_size,
         )
+
+        # best alpha > .9 percentile or <.1 percentile more alphas needed
         if verbose:
             print(
                 f"(ε = {epsilon:.2f}, δ = {args.target_delta}) for α = {best_alpha} (Loss: {np.mean(avg_loss)}"
