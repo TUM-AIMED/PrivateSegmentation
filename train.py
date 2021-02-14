@@ -409,7 +409,8 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
         # because we don't call any function but directly create the model
         already_loaded = True
         # preprocessing step due to version problem (model was saved from torch 1.7.1)
-        PRETRAINED_PATH = getcwd() + "/pretrained_models/unet_weights.pickle"
+        # resnet18 can be directly replaced by vgg11 and mobilenet 
+        PRETRAINED_PATH = getcwd() + "/pretrained_models/unet_resnet18_weights.dat"
         model_args = {
             "encoder_name": "resnet18",
             "classes": 1,
@@ -688,7 +689,7 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
         # except Exception as e:
 
         if (epoch % args.test_interval) == 0:
-            _, matthews = test(
+            _, objective = test(
                 args,
                 model["local_model"] if args.train_federated else model,
                 device,
@@ -711,7 +712,7 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
             )
             if optuna_trial:
                 optuna_trial.report(
-                    matthews,
+                    objective,
                     epoch
                     * (args.repetitions_dataset if args.repetitions_dataset else 1),
                 )
@@ -719,10 +720,10 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
                     raise TrialPruned()
 
             save_model(model, optimizer, model_path, args, epoch, val_mean_std)
-            objectives.append(matthews)
+            objectives.append(objective)
             model_paths.append(model_path)
     # reversal and formula because we want last occurance of highest value
-    objectives = np.array(objectives)[::-1]
+    objectives = np.array(objectives[::-1])
     best_score_idx = np.argmax(objectives)
     highest_score = len(objectives) - best_score_idx - 1
     best_epoch = (
@@ -730,7 +731,7 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
     ) * args.test_interval  # actually -1 but we're switching to 1 indexed here
     best_model_file = model_paths[highest_score]
     print(
-        "Highest matthews coefficient was {:.1f}% in epoch {:d}".format(
+        "Highest objective-score was {:.2f} in epoch {:d}".format(
             objectives[best_score_idx],
             best_epoch * (args.repetitions_dataset if args.train_federated else 1),
         )

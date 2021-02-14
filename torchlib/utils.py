@@ -1866,12 +1866,13 @@ def test(
             env=vis_params["vis_env"],
         )
     if args.bin_seg:
+        final_dice = torch.mean(torch.stack(true_dice)).item() 
         if verbose:
             print(
-                f"True Dice Score @ threshold 0.5: {torch.mean(torch.stack(true_dice)).item():.2f}"
+                f"True Dice Score @ threshold 0.5: {final_dice:.2f}"
             )
             # print(f"Dice score on test set: {(1.0 - test_loss)*100.0:.2f}%")
-        return test_loss, 1.0 - test_loss
+        return test_loss, final_dice
 
     if args.encrypted_inference:
         objective = 100.0 * TP / (len(val_loader) * args.test_batch_size)
@@ -1917,8 +1918,14 @@ def test(
             )
             roc_auc = 0.0
 
+
+        # TODO: other according value when full stats_table is implemented again
+        #       use dice as objective instead of matthews for bin_seg
+        #objective = torch.mean(torch.stack(true_dice)).cpu().item()
+
         matthews_coeff = mt.matthews_corrcoef(total_target, total_pred)
         objective = 100.0 * matthews_coeff
+
         if verbose:
             conf_matrix = mt.confusion_matrix(total_target, total_pred)
             report = mt.classification_report(
@@ -1929,7 +1936,7 @@ def test(
                     conf_matrix,
                     report,
                     roc_auc=roc_auc,
-                    matthews_coeff=matthews_coeff,
+                    matthews_coeff=matthews_coeff if args.bin_seg else 0,
                     class_names=class_names,
                     epoch=epoch,
                 )
