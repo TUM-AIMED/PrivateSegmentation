@@ -710,14 +710,10 @@ def setup_pysyft(args, hook, verbose=False):
             # too high index at the end will in anycase just take the last element
             num_blocks = np.ceil(len(dataset) / Z_LIMIT)
             blocks_per_w = np.ceil(num_blocks / len(workers))
-            # seg_datasets = [
-            #         dataset[
-            #             i:i+int(blocks_per_w*Z_LIMIT)
-            #             ] for i in range(len(workers))
-            #     ]
+            increm = int(blocks_per_w * Z_LIMIT)
             indices = torch.arange(len(dataset)).tolist()
             seg_datasets = [
-                Subset(dataset, indices[i : i + int(blocks_per_w * Z_LIMIT)])
+                Subset(dataset, indices[i*increm : (i+1)*increm])
                 for i in range(len(workers))
             ]
 

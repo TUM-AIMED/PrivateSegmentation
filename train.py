@@ -59,7 +59,7 @@ from sklearn.model_selection import train_test_split
 import segmentation_models_pytorch as smp
 from revision_scripts.module_modification import convert_batchnorm_modules
 from opacus import PrivacyEngine
-import pickle
+import pickle, joblib
 
 
 def main(args, verbose=True, optuna_trial=None, cmd_args=None):
@@ -410,9 +410,9 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
         already_loaded = True
         # preprocessing step due to version problem (model was saved from torch 1.7.1)
         # resnet18 can be directly replaced by vgg11 and mobilenet 
-        PRETRAINED_PATH = getcwd() + "/pretrained_models/unet_resnet18_weights.dat"
+        PRETRAINED_PATH = getcwd() + "/pretrained_models/unet_vgg11_bn_weights.dat"
         model_args = {
-            "encoder_name": "resnet18",
+            "encoder_name": "vgg11_bn",
             "classes": 1,
             "in_channels": 1,
             "activation": "sigmoid",
@@ -421,9 +421,10 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
         model = smp.Unet(**model_args)
         # model.encoder.conv1 = nn.Sequential(nn.Conv2d(1, 3, 1), model.encoder.conv1)
         if args.pretrained:
-            with open(PRETRAINED_PATH, "rb") as handle:
-                state_dict = pickle.load(handle)
-                model.load_state_dict(state_dict)
+            # with open(PRETRAINED_PATH, "rb") as handle:
+            #     state_dict = pickle.load(handle)
+            state_dict = joblib.load(PRETRAINED_PATH)
+            model.load_state_dict(state_dict)
     elif args.model == "MoNet":
         model_type = getMoNet
         model_args = {
