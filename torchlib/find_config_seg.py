@@ -23,6 +23,7 @@ def objective(trial: opt.trial):
     repetitions_dataset = (
         trial.suggest_int("repetitions_dataset", 1, 3) if cmdln_args.federated else 1
     )
+    # TODO: Shouldn't be smaller than max number of repetitions_dataset
     epochs = 25
     if cmdln_args.federated:
         epochs = int(epochs // repetitions_dataset)
@@ -57,7 +58,7 @@ def objective(trial: opt.trial):
         dump_gradients_every=None,
         print_gradient_norm_every=-1,
         optimizer="Adam",
-        model="MoNet",
+        model="unet",
         pretrained=True,
         weight_classes=False,
         pooling_type="max",
@@ -109,11 +110,11 @@ def objective(trial: opt.trial):
         args.DPSSE = False
     print(args)
     try:
-        best_val_acc, epsilon = main(args, verbose=False, optuna_trial=trial)
+        best_val_obj, epsilon = main(args, verbose=False, optuna_trial=trial)
     except Exception as e:
         print(f"Trial failed with exception {e} and arguments {str(args)}.")
         return 0
-    return best_val_acc
+    return best_val_obj
 
 
 if __name__ == "__main__":

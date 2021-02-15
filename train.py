@@ -424,7 +424,8 @@ def main(
         # because we don't call any function but directly create the model
         already_loaded = True
         # preprocessing step due to version problem (model was saved from torch 1.7.1)
-        PRETRAINED_PATH = getcwd() + "/pretrained_models/unet_weights.pickle"
+        # resnet18 can be directly replaced by vgg11 and mobilenet
+        PRETRAINED_PATH = getcwd() + "/pretrained_models/unet_resnet18_weights.dat"
         model_args = {
             "encoder_name": "resnet18",
             "classes": 1,
@@ -744,7 +745,7 @@ def main(
     if return_all_perfomances:
         return_value = deepcopy(objectives), deepcopy(epsila)
     # reversal and formula because we want last occurance of highest value
-    objectives = np.array(objectives)[::-1]
+    objectives = np.array(objectives[::-1])
     best_score_idx = np.argmax(objectives)
     highest_score = len(objectives) - best_score_idx - 1
     best_epoch = (
@@ -752,7 +753,7 @@ def main(
     ) * args.test_interval  # actually -1 but we're switching to 1 indexed here
     best_model_file = model_paths[highest_score]
     print(
-        "Highest objective was {:.1f}% in epoch {:d}".format(
+        "Highest objective-score was {:.2f} in epoch {:d}".format(
             objectives[best_score_idx],
             best_epoch * (args.repetitions_dataset if args.train_federated else 1),
         )

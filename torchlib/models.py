@@ -7,7 +7,7 @@ from torch import nn
 from torch.hub import load_state_dict_from_url
 from numpy.random import seed as npseed
 from random import seed as rseed
-import os, pickle
+import os, pickle, joblib
 
 
 model_urls = {
@@ -1078,13 +1078,14 @@ class MoNet(nn.Module):
 
 def getMoNet(pretrained=False, **kwargs):
     # preprocessing step due to version problem (model was saved from torch 1.7.1)
-    PRETRAINED_PATH = os.getcwd() + "/pretrained_models/monet_weights.pickle"
-    with open(PRETRAINED_PATH, "rb") as handle:
-        state_dict = pickle.load(handle)
+    # PRETRAINED_PATH = os.getcwd() + '/pretrained_models/monet_weights.pickle'
+    # with open(PRETRAINED_PATH, 'rb') as handle:
+    #     state_dict = pickle.load(handle)
     # Init. MoNet
     model = MoNet(**kwargs)
     if pretrained:
         # load weights from storage
         # model.load_state_dict(torch.load(PRETRAINED_PATH))
+        state_dict = joblib.load(os.getcwd() + "/pretrained_models/monet_weights.dat")
         model.load_state_dict(state_dict)
     return model

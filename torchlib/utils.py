@@ -30,6 +30,7 @@ from .dataloader import (
     calc_mean_std,
     LabelMNIST,
     random_split,
+    Subset,
     create_albu_transform,
     CombinedLoader,
     SegmentationData,  # Segmentation
@@ -704,12 +705,30 @@ def setup_pysyft(args, hook, verbose=False):
                 transform=stats_tf_imgs,
             )
 
-            lengths = [int(len(dataset) / len(workers)) for _ in workers]
-            ##assert sum of lenghts is whole dataset on the cost of the last worker
-            ##-> because int() floors division, means that rest is send to last worker
+            ## random distribution ##
+            # lengths = [int(len(dataset) / len(workers)) for _ in workers]
+            # #assert sum of lenghts is whole dataset on the cost of the last worker
+            # #-> because int() floors division, means that rest is send to last worker
+            # lengths[-1] += len(dataset) - sum(lengths)
+            # seg_datasets = random_split(dataset, lengths)
 
-            lengths[-1] += len(dataset) - sum(lengths)
-            seg_datasets = random_split(dataset, lengths)
+            ## distributing after patients ##
+            Z_LIMIT = 64
+            # ceil because I want to have all data at the cost of the last worker
+            # too high index at the end will in anycase just take the last element
+            num_blocks = np.ceil(len(dataset) / Z_LIMIT)
+            blocks_per_w = np.ceil(num_blocks / len(workers))
+            # seg_datasets = [
+            #         dataset[
+            #             i:i+int(blocks_per_w*Z_LIMIT)
+            #             ] for i in range(len(workers))
+            #     ]
+            indices = torch.arange(len(dataset)).tolist()
+            seg_datasets = [
+                Subset(dataset, indices[i : i + int(blocks_per_w * Z_LIMIT)])
+                for i in range(len(workers))
+            ]
+
             seg_datasets = {worker: d for d, worker in zip(seg_datasets, workers)}
 
         if not args.unencrypted_aggregation:
@@ -1915,6 +1934,7 @@ def test(
     model.eval()
     test_loss, TP = 0, 0
     total_pred, total_target, total_scores = [], [], []
+    true_dice = []
 
     with torch.no_grad():
         for data, target in (
@@ -1936,6 +1956,15 @@ def test(
 
             # NOTE: if loss negative (dice) check if output and target have the same shape
             loss = loss_fn(output, target)
+
+            output_n = output.detach().cpu().numpy().squeeze()
+            target_n = target.detach().cpu().numpy().squeeze()
+            threshold = lambda x: np.where(x > 0.5, 1.0, 0.0)
+            dice = 1 - smp.utils.losses.DiceLoss()(
+                torch.from_numpy(threshold(output_n)), torch.from_numpy(target_n)
+            )
+
+            true_dice.append(dice)
 
             test_loss += loss
 
@@ -2010,10 +2039,11 @@ def test(
             env=vis_params["vis_env"],
         )
     if args.bin_seg:
+        final_dice = torch.mean(torch.stack(true_dice)).item()
         if verbose:
-            print(f"Dice score on test set: {(1.0 - test_loss)*100.0:.2f}%")
+            print(f"True Dice Score @ threshold 0.5: {100.0*final_dice:.2f}%")
         test_loss = test_loss.cpu().detach().item()
-        test_loss, objective = test_loss, (1.0 - test_loss) * 100.0
+        test_loss, objective = test_loss, final_dice
         return test_loss, objective
 
     if args.encrypted_inference:
@@ -2064,8 +2094,13 @@ def test(
             )
             roc_auc = 0.0
 
+        # TODO: other according value when full stats_table is implemented again
+        #       use dice as objective instead of matthews for bin_seg
+        # objective = torch.mean(torch.stack(true_dice)).cpu().item()
+
         matthews_coeff = mt.matthews_corrcoef(total_target, total_pred)
         objective = 100.0 * matthews_coeff
+
         if verbose:
             conf_matrix = mt.confusion_matrix(total_target, total_pred)
             report = mt.classification_report(
@@ -2076,7 +2111,7 @@ def test(
                     conf_matrix,
                     report,
                     roc_auc=roc_auc,
-                    matthews_coeff=matthews_coeff,
+                    matthews_coeff=matthews_coeff if args.bin_seg else 0,
                     class_names=class_names,
                     epoch=epoch,
                 )
