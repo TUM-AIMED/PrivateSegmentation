@@ -72,6 +72,7 @@ def ablation(noise_multiplier, max_grad_norm):
     args.equalize = False
     args.grid_dropout = False
     args.dump_gradients_every = None
+    args.print_gradient_norm_every = -1
 
     args.differentially_private = True
     args.microbatch_size = 1
@@ -95,9 +96,9 @@ def ablation(noise_multiplier, max_grad_norm):
     #     args.DPSSE = False
     #     args.dpsse_eps = 1.0
     #     args.microbatch_size = args.batch_size
-    objectives, epsila = main(args, verbose=False, return_all_perfomances=True)
-    if epsilon < 1:
-        warn(f"Epsilon is only {epsilon:.2f}. Seems very low.")
+    objectives, epsila = main(args, verbose=True, return_all_perfomances=True)
+    if epsila[-1] < 1:
+        warn(f"Epsilon is only {epsila[-1]:.2f}. Seems very low.")
     return objectives, epsila
 
 
@@ -109,8 +110,8 @@ if __name__ == "__main__":
             "ablation.csv",
         )
     for i in range(40):
-        noise_multiplier = uniform(0.1, 1.0)
-        max_grad_norm = uniform(0.1, 2.0)
+        noise_multiplier = 1e-6
+        max_grad_norm = 10.0
         utilities, epsila = ablation(noise_multiplier, max_grad_norm)
         assert len(utilities) == len(epsila)
         results = {

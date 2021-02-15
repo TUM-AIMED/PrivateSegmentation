@@ -88,7 +88,9 @@ def _batchnorm_to_instancenorm(module: nn.modules.batchnorm._BatchNorm) -> nn.Mo
     return matchDim()(module.num_features)
 
 
-def _batchnorm_to_groupnorm(module: nn.modules.batchnorm._BatchNorm) -> nn.Module:
+def _batchnorm_to_groupnorm(
+    module: nn.modules.batchnorm._BatchNorm, keep_running_stats: bool = True
+) -> nn.Module:
     """
     Converts a BatchNorm ``module`` to GroupNorm module.
     This is a helper function.
@@ -101,7 +103,26 @@ def _batchnorm_to_groupnorm(module: nn.modules.batchnorm._BatchNorm) -> nn.Modul
         paper *Accurate, Large Minibatch SGD: Training ImageNet in 1 Hour*
         https://arxiv.org/pdf/1706.02677.pdf
     """
-    return nn.GroupNorm(min(32, module.num_features), module.num_features, affine=True)
+    if keep_running_stats:
+        return nn.GroupNorm(
+            min(32, module.num_features), module.num_features, affine=True
+        )
+    else:
+        m = nn.BatchNorm2d(
+            module.num_features,
+            module.eps,
+            module.momentum,
+            affine=True,
+            track_running_stats=False,
+        )
+        m.load_state_dict(
+            {
+                key: value
+                for key, value in module.state_dict().items()
+                if key in m.state_dict()
+            }
+        )
+        return m
 
 
 def nullify_batchnorm_modules(root: nn.Module) -> nn.Module:

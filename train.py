@@ -441,7 +441,7 @@ def main(
     elif args.model == "MoNet":
         model_type = getMoNet
         model_args = {
-            "pretrained": args.pretrained,
+            "pretrained": True,  # args.pretrained,
             "activation": "sigmoid",
         }
     else:
@@ -517,7 +517,6 @@ def main(
                 if not hasattr(w, "total_dp_steps"):
                     setattr(w, "total_dp_steps", 0)
         else:
-            model = convert_batchnorm_modules(model)
             if not hasattr(model, "total_dp_steps"):
                 setattr(model, "total_dp_steps", 0)
             # privacy_engine = PrivacyEngine(
@@ -529,6 +528,7 @@ def main(
             #     max_grad_norm=args.max_grad_norm,
             # )
             # privacy_engine.attach(optimizer)
+            model = convert_batchnorm_modules(model)
 
     loss_args = {"weight": cw, "reduction": "mean"}
     if args.mixup or (args.weight_classes and args.train_federated):

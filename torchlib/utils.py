@@ -297,6 +297,9 @@ class Arguments:
             assert self.train_federated, "If you use websockets it must be federated"
         self.num_threads = config.getint("system", "num_threads", fallback=0)
         self.dump_gradients_every = cmd_args.dump_gradients_every
+        self.print_gradient_norm_every = config.getint(
+            "DP", "print_gradient_norm_every", fallback=-1
+        )
 
     @classmethod
     def from_namespace(cls, args):
@@ -1778,8 +1781,23 @@ def train(  # never called on websockets
             steps = epoch * len(train_loader) + batch_idx
             if steps % args.dump_gradients_every == 0:
                 gradient_dump[steps] = [
-                    param.grad.detach() for param in model.parameters()
+                    param.grad.detach().cpu() for param in model.parameters()
                 ]
+        if args.print_gradient_norm_every > 0:
+            steps = epoch * len(train_loader) + batch_idx
+            if steps % args.print_gradient_norm_every == 0:
+                if args.dump_gradients_every and steps in gradient_dump:
+                    norm = torch.stack(
+                        [x_i.flatten().norm(2) for x_i in gradient_dump[steps]]
+                    ).norm(2)
+                else:
+                    norm = torch.stack(
+                        [
+                            param.grad.detach().cpu().flatten().norm(2)
+                            for param in model.parameters()
+                        ]
+                    ).norm()
+                print(f"Gradient norm: {norm}")
     if args.differentially_private:
         sample_size = len(train_loader.dataset)
         if args.batch_size / sample_size > 1.0:
@@ -1995,7 +2013,8 @@ def test(
         if verbose:
             print(f"Dice score on test set: {(1.0 - test_loss)*100.0:.2f}%")
         test_loss = test_loss.cpu().detach().item()
-        return test_loss, 1.0 - test_loss
+        test_loss, objective = test_loss, (1.0 - test_loss) * 100.0
+        return test_loss, objective
 
     if args.encrypted_inference:
         objective = 100.0 * TP / (len(val_loader) * args.test_batch_size)
