@@ -62,7 +62,7 @@ from revision_scripts.module_modification import (
     _batchnorm_to_bn_without_stats,
 )
 from opacus import PrivacyEngine
-import pickle
+from joblib import load as joblibload
 
 from syft.frameworks.torch.fl.dataloader import PoissonBatchSampler
 from torch.utils.data import SequentialSampler
@@ -363,7 +363,11 @@ def main(
         )
         vis_params = {"vis": vis, "vis_env": vis_env}
     # for the models that are loaded in directly (e.g. U-Net)
-    already_loaded = False
+    if args.model == "unet":
+        warn(
+            "Pure UNet is deprecated. Please specify backbone (unet_resnet18, unet_mobilenet_v2, unet_vgg11_bn)"
+        )
+        exit()
     if args.model == "vgg16":
         model_type = vgg16
         model_args = {
@@ -399,29 +403,27 @@ def main(
         model_type = SimpleSegNet
         # no params for now
         model_args = {}
-    elif args.model == "unet":
+    elif "unet" in args.model:
+        backbone = "_".join(
+            args.model.split("_")[1:]
+        )  # remove the unet from the model str
         # because we don't call any function but directly create the model
-        already_loaded = True
         # preprocessing step due to version problem (model was saved from torch 1.7.1)
         # resnet18 can be directly replaced by vgg11 and mobilenet
-        PRETRAINED_PATH = getcwd() + "/pretrained_models/unet_resnet18_weights.dat"
+        # PRETRAINED_PATH =  "/pretrained_models/unet_resnet18_weights.dat"
         model_args = {
-            "encoder_name": "resnet18",
+            "encoder_name": backbone,
             "classes": 1,
             "in_channels": 1,
             "activation": "sigmoid",
             "encoder_weights": None,
         }
-        model = smp.Unet(**model_args)
+        model_type = smp.Unet
         # model.encoder.conv1 = nn.Sequential(nn.Conv2d(1, 3, 1), model.encoder.conv1)
-        if args.pretrained:
-            with open(PRETRAINED_PATH, "rb") as handle:
-                state_dict = pickle.load(handle)
-                model.load_state_dict(state_dict)
+
     elif args.model == "MoNet":
         model_type = getMoNet
         model_args = {
-            "pretrained": True,  # args.pretrained,
             "activation": "sigmoid",
         }
     else:
@@ -429,8 +431,14 @@ def main(
             "Model name not understood. Please choose one of 'vgg16, 'simpleconv', resnet-18'."
         )
 
-    if not already_loaded:
-        model = model_type(**model_args)
+    model = model_type(**model_args)
+
+    if args.pretrained and (not args.pretrained_path is None):
+        # with open(getcwd() + args.pretrained_path, "rb") as handle:
+        #     state_dict = pickle.load(handle)
+        #     model.load_state_dict(state_dict)
+        state_dict = joblibload(getcwd() + args.pretrained_path)
+        model.load_state_dict(state_dict)
 
     if args.train_federated:
         model = {
@@ -825,6 +833,12 @@ if __name__ == "__main__":
         default=None,
         type=int,
         help="Dump gradients during training every n steps",
+    )
+    parser.add_argument(
+        "--pretrained_path",
+        default=None,
+        type=str,
+        help="Path to pretrained model weights that shall be used.",
     )
     cmd_args = parser.parse_args()
 

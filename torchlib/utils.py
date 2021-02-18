@@ -179,10 +179,13 @@ class Arguments:
             "vgg16",
             "SimpleSegNet",
             "MoNet",
-            "unet",
+            "unet_resnet18",
+            "unet_vgg11_bn",
+            "unet_mobilenet_v2",
         ]  # Segmentation
         self.pooling_type = config.get("config", "pooling_type", fallback="max")
         self.pretrained = config.getboolean("config", "pretrained")  # , fallback=False)
+        self.pretrained_path = cmd_args.pretrained_path
         self.weight_decay = config.getfloat("config", "weight_decay")  # , fallback=0.0)
         self.weight_classes = config.getboolean(
             "config", "weight_classes"
@@ -193,8 +196,7 @@ class Arguments:
         self.shear = config.getfloat("augmentation", "shear", fallback=0.0)
         if self.shear > 0.0:
             warn(
-                "Shearing not supported any more.",
-                category=DeprecationWarning,
+                "Shearing not supported any more.", category=DeprecationWarning,
             )
         self.albu_prob = config.getfloat(
             "albumentations", "overall_prob"
@@ -383,8 +385,7 @@ class MixUp(torch.nn.Module):
         self.λ = λ
 
     def forward(
-        self,
-        x: Tuple[Union[torch.tensor, Tuple[torch.tensor]], Tuple[torch.Tensor]],
+        self, x: Tuple[Union[torch.tensor, Tuple[torch.tensor]], Tuple[torch.Tensor]],
     ):
         assert len(x) == 2, "need data and target"
         x, y = x
@@ -692,17 +693,14 @@ def setup_pysyft(args, hook, verbose=False):
             # transforms applied to get the stats: mean and val
             basic_tfs = [
                 a.Resize(
-                    args.inference_resolution,
-                    args.inference_resolution,
-                    INTER_NEAREST,
+                    args.inference_resolution, args.inference_resolution, INTER_NEAREST,
                 ),
                 a.RandomCrop(args.train_resolution, args.train_resolution),
                 a.ToFloat(max_value=255.0),
             ]
             stats_tf_imgs = AlbumentationsTorchTransform(a.Compose(basic_tfs))
             dataset = MSD_data_images(
-                args.data_dir + "/train",
-                transform=stats_tf_imgs,
+                args.data_dir + "/train", transform=stats_tf_imgs,
             )
 
             ## random distribution ##
@@ -745,8 +743,7 @@ def setup_pysyft(args, hook, verbose=False):
             if args.data_dir == "mnist":
                 dataset = mnist_datasets[worker.id]
                 mean, std = calc_mean_std(
-                    dataset,
-                    epsilon=args.dpsse_eps if args.DPSSE else None,
+                    dataset, epsilon=args.dpsse_eps if args.DPSSE else None,
                 )
                 dataset.dataset.transform.transform.transforms.transforms.append(  # beautiful
                     a.Normalize(mean, std, max_pixel_value=1.0),
@@ -756,8 +753,7 @@ def setup_pysyft(args, hook, verbose=False):
                 # get dataset
                 dataset = seg_datasets[worker.id]
                 mean, std = calc_mean_std(
-                    dataset,
-                    epsilon=args.dpsse_eps if args.DPSSE else None,
+                    dataset, epsilon=args.dpsse_eps if args.DPSSE else None,
                 )
                 dataset.dataset.transform.transform.transforms.transforms.append(
                     a.Compose(
@@ -902,10 +898,7 @@ def setup_pysyft(args, hook, verbose=False):
             data, targets = [], []
             if args.mixup:
                 dataset = torch.utils.data.DataLoader(
-                    dataset,
-                    batch_size=1,
-                    shuffle=True,
-                    num_workers=args.num_threads,
+                    dataset, batch_size=1, shuffle=True, num_workers=args.num_threads,
                 )
                 mixup = MixUp(λ=args.mixup_lambda, p=args.mixup_prob)
                 last_set = None
@@ -945,12 +938,8 @@ def setup_pysyft(args, hook, verbose=False):
                 selected_data = selected_data.squeeze(1)
                 selected_targets = selected_targets.squeeze(1)
             del data, targets
-            selected_data.tag(
-                "#traindata",
-            )
-            selected_targets.tag(
-                "#traintargets",
-            )
+            selected_data.tag("#traindata",)
+            selected_targets.tag("#traintargets",)
             worker.load_data([selected_data, selected_targets])
     if crypto_provider is not None:
         grid = sy.PrivateGridNetwork(*(list(workers.values()) + [crypto_provider]))
@@ -963,8 +952,7 @@ def setup_pysyft(args, hook, verbose=False):
     for worker in data.keys():
         dist_dataset = [  # TODO: in the future transform here would be nice but currently raise errors
             sy.BaseDataset(
-                data[worker][0],
-                target[worker][0],
+                data[worker][0], target[worker][0],
             )  # transform=federated_tf
         ]
         fed_dataset = sy.FederatedDataset(dist_dataset)
@@ -1248,12 +1236,7 @@ def train_federated(
         )
     else:
         if verbose:
-            print(
-                "Train Epoch: {} \tLoss: {:.6f}".format(
-                    epoch,
-                    avg_loss,
-                )
-            )
+            print("Train Epoch: {} \tLoss: {:.6f}".format(epoch, avg_loss,))
     return model, epsilon
 
 
@@ -1470,11 +1453,7 @@ def secure_aggregation_epoch(
 
             if args.differentially_private and args.batch_size > args.microbatch_size:
                 batch = next(dataloader)
-                for i in range(
-                    0,
-                    batch[0].shape[0],
-                    args.microbatch_size,
-                ):
+                for i in range(0, batch[0].shape[0], args.microbatch_size,):
                     data, target = (
                         batch[0][i : i + args.microbatch_size].to(device),
                         batch[1][i : i + args.microbatch_size].to(device),
@@ -1696,11 +1675,7 @@ def train(  # never called on websockets
         # data, target = data.view(-1, 1, res, res).to(device), target.view(-1, res, res).to(device)
         data, target = data.to(device), target.to(device)
         if args.differentially_private and args.batch_size > args.microbatch_size:
-            for i in range(
-                0,
-                data.shape[0],
-                args.microbatch_size,
-            ):
+            for i in range(0, data.shape[0], args.microbatch_size,):
                 d_i, t_i = (
                     data[i : i + args.microbatch_size],
                     target[i : i + args.microbatch_size],
@@ -1847,12 +1822,7 @@ def train(  # never called on websockets
     # else:
     #     epsilon = 0
     if not args.visdom and verbose:
-        print(
-            "Train Epoch: {} \tLoss: {:.6f}".format(
-                epoch,
-                np.mean(avg_loss),
-            )
-        )
+        print("Train Epoch: {} \tLoss: {:.6f}".format(epoch, np.mean(avg_loss),))
     return model, epsilon, gradient_dump
 
 
@@ -1908,11 +1878,7 @@ def stats_table(
     headers.extend(
         [class_names[i] if class_names else i for i in range(conf_matrix.shape[0])]
     )
-    return tabulate(
-        rows,
-        headers=headers,
-        tablefmt="fancy_grid",
-    )
+    return tabulate(rows, headers=headers, tablefmt="fancy_grid",)
 
 
 def test(
@@ -2052,11 +2018,7 @@ def test(
         if verbose:
             print(
                 "Test set: Epoch: {:d} Average loss: {:.4f}, Recall: {}/{} ({:.0f}%)\n".format(
-                    epoch,
-                    test_loss,
-                    TP,
-                    L,
-                    objective,
+                    epoch, test_loss, TP, L, objective,
                 ),
                 # end="",
             )
