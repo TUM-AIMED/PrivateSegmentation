@@ -56,9 +56,11 @@ from torchlib.utils import (
     setup_pysyft,
     calc_class_weights,
 )
-from sklearn.model_selection import train_test_split
 import segmentation_models_pytorch as smp
-from revision_scripts.module_modification import convert_batchnorm_modules
+from revision_scripts.module_modification import (
+    convert_batchnorm_modules,
+    _batchnorm_to_bn_without_stats,
+)
 from opacus import PrivacyEngine
 import pickle
 
@@ -86,14 +88,7 @@ def main(
 
     device = torch.device("cuda" if use_cuda else "cpu")  # pylint: disable=no-member
 
-    kwargs = (
-        {
-            "num_workers": args.num_threads,
-            "pin_memory": True,
-        }
-        if use_cuda
-        else {}
-    )
+    kwargs = {"num_workers": args.num_threads, "pin_memory": True,} if use_cuda else {}
 
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     exp_name = "{:s}_{:s}_{:s}".format(
@@ -118,11 +113,7 @@ def main(
             worker_names,
             crypto_provider,
             val_mean_std,
-        ) = setup_pysyft(
-            args,
-            hook,
-            verbose=verbose,
-        )
+        ) = setup_pysyft(args, hook, verbose=verbose,)
     else:
         if args.data_dir == "mnist":
             val_mean_std = torch.tensor(  # pylint:disable=not-callable
@@ -195,18 +186,14 @@ def main(
 
             # transforms applied to get the stats: mean and val
             basic_tfs = [
-                a.Resize(
-                    args.inference_resolution,
-                    args.inference_resolution,
-                ),
+                a.Resize(args.inference_resolution, args.inference_resolution,),
                 a.RandomCrop(args.train_resolution, args.train_resolution),
                 a.ToFloat(max_value=255.0),
             ]
             stats_tf_imgs = AlbumentationsTorchTransform(a.Compose(basic_tfs))
             # dataset to calculate stats
             dataset = MSD_data_images(
-                args.data_dir + "/train",
-                transform=stats_tf_imgs,
+                args.data_dir + "/train", transform=stats_tf_imgs,
             )
             # get stats
             val_mean_std = calc_mean_std(dataset)
@@ -262,9 +249,7 @@ def main(
             if not args.pretrained:
                 loader.change_channels(1)
             dataset = datasets.ImageFolder(
-                args.data_dir,
-                transform=stats_tf,
-                loader=loader,
+                args.data_dir, transform=stats_tf, loader=loader,
             )
             # TODO: issue #1 - this only creates two 2 new dimensions in case of three channels
             assert (
@@ -302,10 +287,7 @@ def main(
             )
         else:
             train_loader = torch.utils.data.DataLoader(
-                dataset,
-                batch_size=args.batch_size,
-                shuffle=True,
-                **kwargs,
+                dataset, batch_size=args.batch_size, shuffle=True, **kwargs,
             )
 
         # val_tf = [
@@ -319,10 +301,7 @@ def main(
         # valset.dataset.transform = AlbumentationsTorchTransform(a.Compose(val_tf))
 
         val_loader = torch.utils.data.DataLoader(
-            valset,
-            batch_size=args.test_batch_size,
-            shuffle=True,
-            **kwargs,
+            valset, batch_size=args.test_batch_size, shuffle=True, **kwargs,
         )
         # del total_L, fraction
 
@@ -513,7 +492,9 @@ def main(
         ALPHAS = [1 + x / 10.0 for x in range(1, 100)] + list(range(12, 64))
         if args.train_federated:
             for key, m in model.items():
-                model[key] = convert_batchnorm_modules(m)
+                model[key] = convert_batchnorm_modules(
+                    m, converter=_batchnorm_to_bn_without_stats
+                )
             for w in train_loader.keys():
                 if not hasattr(w, "total_dp_steps"):
                     setattr(w, "total_dp_steps", 0)
@@ -529,7 +510,9 @@ def main(
             #     max_grad_norm=args.max_grad_norm,
             # )
             # privacy_engine.attach(optimizer)
-            model = convert_batchnorm_modules(model)
+            model = convert_batchnorm_modules(
+                model, converter=_batchnorm_to_bn_without_stats
+            )
 
     loss_args = {"weight": cw, "reduction": "mean"}
     if args.mixup or (args.weight_classes and args.train_federated):
@@ -765,15 +748,11 @@ def main(
     model.load_state_dict(state["model_state_dict"])
 
     shutil.copyfile(
-        best_model_file,
-        "model_weights/final_{:s}.pt".format(exp_name),
+        best_model_file, "model_weights/final_{:s}.pt".format(exp_name),
     )
     if args.save_file:
         save_config_results(
-            args,
-            objectives[best_score_idx],
-            timestamp,
-            args.save_file,
+            args, objectives[best_score_idx], timestamp, args.save_file,
         )
 
     # delete old model weights

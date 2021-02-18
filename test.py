@@ -14,9 +14,23 @@ from sklearn import metrics as mt
 from numpy import newaxis
 from random import seed as rseed
 from torchlib.utils import stats_table, Arguments  # pylint:disable=import-error
-from torchlib.models import vgg16, resnet18, conv_at_resolution
-from torchlib.dataloader import AlbumentationsTorchTransform, CombinedLoader
+from torchlib.models import vgg16, resnet18, conv_at_resolution, getMoNet
+from torchlib.dataloader import (
+    AlbumentationsTorchTransform,
+    CombinedLoader,
+    MSD_data_images,
+)
+from warnings import warn
+import segmentation_models_pytorch as smp
+import pickle
+import numpy as np
 
+from revision_scripts.module_modification import (
+    convert_batchnorm_modules,
+    _batchnorm_to_bn_without_stats,
+)
+
+from torchlib.plot_stuff import plot_imgs
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -35,6 +49,9 @@ if __name__ == "__main__":
         help="model weights to use",
     )
     parser.add_argument("--cuda", action="store_true", help="Use CUDA acceleration.")
+    parser.add_argument(
+        "--segmentation", action="store_true", help="Evaluate segmentation model"
+    )
     cmd_args = parser.parse_args()
 
     use_cuda = cmd_args.cuda and torch.cuda.is_available()
@@ -54,6 +71,8 @@ if __name__ == "__main__":
 
     kwargs = {"num_workers": 1, "pin_memory": True} if use_cuda else {}
     class_names = None
+    if "val_mean_std" not in state.keys():
+        warn("mean and std on which model is trained are unknown", category=UserWarning)
     val_mean_std = (
         state["val_mean_std"]
         if "val_mean_std" in state.keys()
@@ -82,6 +101,37 @@ if __name__ == "__main__":
                     transforms.Normalize(mean, std),
                 ]
             ),
+        )
+    elif cmd_args.segmentation:
+        basic_tfs = [
+            a.Resize(args.inference_resolution, args.inference_resolution,),
+            a.RandomCrop(args.train_resolution, args.train_resolution),
+            a.ToFloat(max_value=255.0),
+        ]
+        val_trans = a.Compose(
+            [
+                *basic_tfs,
+                a.Normalize(mean, std, max_pixel_value=1.0),
+                a.Lambda(
+                    image=lambda x, **kwargs: x.reshape(
+                        # add extra channel to be compatible with nn.Conv2D
+                        -1,
+                        args.train_resolution,
+                        args.train_resolution,
+                    ),
+                    mask=lambda x, **kwargs: np.where(
+                        # binarize masks
+                        x.reshape(-1, args.train_resolution, args.train_resolution)
+                        / 255.0
+                        > 0.5,
+                        np.ones_like(x),
+                        np.zeros_like(x),
+                    ).astype(np.float32),
+                ),
+            ]
+        )
+        testset = MSD_data_images(
+            args.data_dir + "/test", transform=AlbumentationsTorchTransform(val_trans),
         )
     else:
         num_classes = 3
@@ -117,38 +167,83 @@ if __name__ == "__main__":
     test_loader = torch.utils.data.DataLoader(
         testset, batch_size=1, shuffle=True, **kwargs
     )
+    already_loaded = False
     if args.model == "vgg16":
-        model = vgg16(
-            pretrained=args.pretrained,
-            num_classes=num_classes,
-            in_channels=3 if args.pretrained else 1,
-            adptpool=False,
-            input_size=args.inference_resolution,
-            pooling=args.pooling_type,
-        )
+        model_type = vgg16
+        model_args = {
+            "pretrained": args.pretrained,
+            "num_classes": num_classes,
+            "in_channels": 1 if args.data_dir == "mnist" or not args.pretrained else 3,
+            "adptpool": False,
+            "input_size": args.inference_resolution,
+            "pooling": args.pooling_type,
+        }
     elif args.model == "simpleconv":
         if args.pretrained:
-            raise RuntimeError("No pretrained version available")
-        model = conv_at_resolution[args.train_resolution](
-            num_classes=num_classes,
-            in_channels=3 if args.pretrained else 1,
-            pooling=args.pooling_type,
-        )
+            warn("No pretrained version available")
+
+        model_type = conv_at_resolution[args.train_resolution]
+        model_args = {
+            "num_classes": num_classes,
+            "in_channels": 1 if args.data_dir == "mnist" or not args.pretrained else 3,
+            "pooling": args.pooling_type,
+        }
     elif args.model == "resnet-18":
-        model = resnet18(
-            pretrained=args.pretrained,
-            num_classes=num_classes,
-            in_channels=3 if args.pretrained else 1,
-            adptpool=False,
-            input_size=args.inference_resolution,
-            pooling=args.pooling_type if hasattr(args, "pooling_type") else "avg",
-        )
+        model_type = resnet18
+        model_args = {
+            "pretrained": args.pretrained,
+            "num_classes": num_classes,
+            "in_channels": 1 if args.data_dir == "mnist" or not args.pretrained else 3,
+            "adptpool": False,
+            "input_size": args.inference_resolution,
+            "pooling": args.pooling_type,
+        }
+    elif args.model == "unet":
+        if "vgg" in cmd_args.model_weights:
+            encoder_name = "vgg11_bn"
+        elif "mobilenet" in cmd_args.model_weights:
+            encoder_name = "mobilenet_v2"
+        else:
+            encoder_name = "resnet18"
+        # because we don't call any function but directly create the model
+        already_loaded = True
+        # preprocessing step due to version problem (model was saved from torch 1.7.1)
+        # resnet18 can be directly replaced by vgg11 and mobilenet
+        model_args = {
+            "encoder_name": encoder_name,
+            "classes": 1,
+            "in_channels": 1,
+            "activation": "sigmoid",
+            "encoder_weights": None,
+        }
+        model = smp.Unet(**model_args)
+        # model.encoder.conv1 = nn.Sequential(nn.Conv2d(1, 3, 1), model.encoder.conv1)
+
+    elif args.model == "MoNet":
+        model_type = getMoNet
+        model_args = {
+            "pretrained": False,  # args.pretrained,
+            "activation": "sigmoid",
+        }
     else:
-        raise NotImplementedError("model unknown")
+        raise ValueError(
+            "Model name not understood. Please choose one of 'vgg16, 'simpleconv', resnet-18'."
+        )
+
+    if not already_loaded:
+        model = model_type(**model_args)
+
+    if args.differentially_private:
+        model = convert_batchnorm_modules(
+            model, converter=_batchnorm_to_bn_without_stats
+        )
+
     model.load_state_dict(state["model_state_dict"])
     model.to(device)
     # test method
     model.eval()
+
+    imgs = []
     total_pred, total_target, total_scores = [], [], []
     with torch.no_grad():
         for data, target in tqdm(
@@ -161,17 +256,45 @@ if __name__ == "__main__":
                 data = data.squeeze(0)
             data, target = data.to(device), target.to(device)
             output = model(data)
+            imgs.append(data)
+            total_scores.append(output)
             pred = output.argmax(dim=1)
             total_pred.append(pred)
-            total_scores.append(output)
             tgts = target.view_as(pred)
             total_target.append(tgts)
             equal = pred.eq(tgts)
-    total_pred = torch.cat(total_pred).cpu().numpy()  # pylint: disable=no-member
-    total_target = torch.cat(total_target).cpu().numpy()  # pylint: disable=no-member
-    total_scores = torch.cat(total_scores).cpu().numpy()  # pylint: disable=no-member
-    total_scores -= total_scores.min(axis=1)[:, newaxis]
-    total_scores = total_scores / total_scores.sum(axis=1)[:, newaxis]
+    imgs = torch.cat(imgs).cpu().squeeze()
+    total_pred = torch.cat(total_pred).cpu().squeeze()  # pylint: disable=no-member
+    total_target = torch.cat(total_target).cpu().squeeze()  # pylint: disable=no-member
+    total_scores = torch.cat(total_scores).cpu().squeeze()  # pylint: disable=no-member
+
+    if cmd_args.segmentation:
+        total_pred = torch.where(
+            total_scores < 0.5,
+            torch.zeros_like(total_scores),
+            torch.ones_like(total_scores),
+        )
+        diceloss = smp.utils.losses.DiceLoss(eps=1e-7)
+        iou = smp.utils.metrics.IoU()(total_pred, total_target)
+        # fscore = smp.utils.metrics.Fscore()(total_pred, total_target)
+        print(f"Dice Loss: {diceloss(total_scores, total_target)*100.0:.2f}%")
+        print(f"Dice Score: {(1.0-diceloss(total_pred, total_target))*100.0:.2f}%")
+        print(f"IoU: {iou*100.0:.2f}%")
+        # print(f"Fscore: {fscore*100.0:.2f}%")
+        plot_imgs(
+            imgs[:10], total_target[:10], total_pred[:10]
+        )  # , savefig="test.png")
+        exit()
+        total_target = total_target.flatten().numpy().astype(np.int)
+        total_scores = total_scores.flatten().numpy()
+        total_pred = total_pred.flatten().numpy()
+    else:
+        total_pred = total_pred.numpy()
+        total_target = total_target.numpy()
+        total_scores = total_scores.numpy()
+
+        total_scores -= total_scores.min(axis=1)[:, newaxis]
+        total_scores = total_scores / total_scores.sum(axis=1)[:, newaxis]
 
     roc_auc = mt.roc_auc_score(total_target, total_scores, multi_class="ovo")
     objective = 100.0 * roc_auc
