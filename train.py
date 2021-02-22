@@ -6,6 +6,7 @@ import configparser
 import random
 import shutil
 from datetime import datetime
+import time
 from warnings import warn
 
 import numpy as np
@@ -409,10 +410,10 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
         # because we don't call any function but directly create the model
         already_loaded = True
         # preprocessing step due to version problem (model was saved from torch 1.7.1)
-        # resnet18 can be directly replaced by vgg11 and mobilenet 
-        PRETRAINED_PATH = getcwd() + "/pretrained_models/unet_vgg11_bn_weights.dat"
+        # resnet18 can be directly replaced by vgg11_bn and mobilenet_v2 
+        PRETRAINED_PATH = getcwd() + "/pretrained_models/unet_mobilenet_v2_weights.dat"
         model_args = {
-            "encoder_name": "vgg11_bn",
+            "encoder_name": "mobilenet_v2",
             "classes": 1,
             "in_channels": 1,
             "activation": "sigmoid",
@@ -612,6 +613,7 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
     )
     objectives = []
     model_paths = []
+    times = []
     """if args.train_federated:
         test_params = {
             "device": device,
@@ -655,6 +657,7 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
                 env=vis_env,
             )
 
+        epoch_start_time = time.time()
         if args.train_federated:
             model, epsilon = train_federated(
                 args,
@@ -688,6 +691,7 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
                 gradient_dump=gradient_dump,
             )
         # except Exception as e:
+        times.append(time.time() - epoch_start_time)
 
         if (epoch % args.test_interval) == 0:
             _, objective = test(
@@ -732,9 +736,12 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
     ) * args.test_interval  # actually -1 but we're switching to 1 indexed here
     best_model_file = model_paths[highest_score]
     print(
-        "Highest objective-score was {:.2f} in epoch {:d}".format(
+        "Highest objective-score was {:.2f} in epoch {:d}. \
+        \nTime per epoch - mean: {:.2f}s, std: {:.2f}s".format(
             objectives[best_score_idx],
             best_epoch * (args.repetitions_dataset if args.train_federated else 1),
+            np.mean(times), 
+            np.std(times),
         )
     )
     # load best model on val set
