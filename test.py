@@ -167,7 +167,12 @@ if __name__ == "__main__":
     test_loader = torch.utils.data.DataLoader(
         testset, batch_size=1, shuffle=True, **kwargs
     )
-    already_loaded = False
+    if args.model == "unet":
+        warn(
+            "Pure UNet is deprecated. Please specify backbone (unet_resnet18, unet_mobilenet_v2, unet_vgg11_bn)",
+            category=DeprecationWarning,
+        )
+        exit()
     if args.model == "vgg16":
         model_type = vgg16
         model_args = {
@@ -198,31 +203,32 @@ if __name__ == "__main__":
             "input_size": args.inference_resolution,
             "pooling": args.pooling_type,
         }
-    elif args.model == "unet":
-        if "vgg" in cmd_args.model_weights:
-            encoder_name = "vgg11_bn"
-        elif "mobilenet" in cmd_args.model_weights:
-            encoder_name = "mobilenet_v2"
-        else:
-            encoder_name = "resnet18"
+    # Segmentation
+    elif args.model == "SimpleSegNet":
+        model_type = SimpleSegNet
+        # no params for now
+        model_args = {}
+    elif "unet" in args.model:
+        backbone = "_".join(
+            args.model.split("_")[1:]
+        )  # remove the unet from the model str
         # because we don't call any function but directly create the model
-        already_loaded = True
         # preprocessing step due to version problem (model was saved from torch 1.7.1)
         # resnet18 can be directly replaced by vgg11 and mobilenet
+        # PRETRAINED_PATH =  "/pretrained_models/unet_resnet18_weights.dat"
         model_args = {
-            "encoder_name": encoder_name,
+            "encoder_name": backbone,
             "classes": 1,
             "in_channels": 1,
             "activation": "sigmoid",
             "encoder_weights": None,
         }
-        model = smp.Unet(**model_args)
+        model_type = smp.Unet
         # model.encoder.conv1 = nn.Sequential(nn.Conv2d(1, 3, 1), model.encoder.conv1)
 
     elif args.model == "MoNet":
         model_type = getMoNet
         model_args = {
-            "pretrained": False,  # args.pretrained,
             "activation": "sigmoid",
         }
     else:
@@ -230,8 +236,7 @@ if __name__ == "__main__":
             "Model name not understood. Please choose one of 'vgg16, 'simpleconv', resnet-18'."
         )
 
-    if not already_loaded:
-        model = model_type(**model_args)
+    model = model_type(**model_args)
 
     if args.differentially_private:
         model = convert_batchnorm_modules(

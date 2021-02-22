@@ -74,14 +74,18 @@ def ablation(args, noise_multiplier, max_grad_norm):
     # args.equalize = False
     # args.grid_dropout = False
     # args.dump_gradients_every = None
+    args.model = "unet_vgg11_bn"
+    args.pretrained_path = "pretrained_models/unet_vgg11_bn_weights.dat"
+    print(f"Model {args.model} with weights {args.pretrained_path}")
     args.print_gradient_norm_every = -1
+    args.cuda = False
 
     args.config = (f"ablationutilityprivacy",)
     args.save_file = f"model_weights/completed_trainings_DPUTILITY.csv"
     args.name = f"DPUTILITY"
 
     args.deterministic = True
-    args.data_dir = "./data/MSD/Task03_Liver/"
+    args.data_dir = cmd_args.data_dir
     # args.batch_size = 1
     args.differentially_private = True
     args.microbatch_size = 1
@@ -118,6 +122,12 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--args_file", required=True, type=str, help="Where to get hyperparams from"
+    )
+    parser.add_argument(
+        "--data_dir",
+        default="./data/MSD/Task03_Liver/",
+        type=str,
+        help="Path to data directory",
     )
     cmd_args = parser.parse_args()
     hyperparam_runs = pd.read_csv(cmd_args.args_file)

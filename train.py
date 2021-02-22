@@ -365,7 +365,8 @@ def main(
     # for the models that are loaded in directly (e.g. U-Net)
     if args.model == "unet":
         warn(
-            "Pure UNet is deprecated. Please specify backbone (unet_resnet18, unet_mobilenet_v2, unet_vgg11_bn)"
+            "Pure UNet is deprecated. Please specify backbone (unet_resnet18, unet_mobilenet_v2, unet_vgg11_bn)",
+            category=DeprecationWarning,
         )
         exit()
     if args.model == "vgg16":
@@ -437,8 +438,9 @@ def main(
         # with open(getcwd() + args.pretrained_path, "rb") as handle:
         #     state_dict = pickle.load(handle)
         #     model.load_state_dict(state_dict)
-        state_dict = joblibload(getcwd() + args.pretrained_path)
+        state_dict = joblibload(args.pretrained_path)
         model.load_state_dict(state_dict)
+    model.to(device)
 
     if args.train_federated:
         model = {
@@ -604,7 +606,6 @@ def main(
             m.to(device)
     else:
         model.to(device)
-
     test(
         args,
         model["local_model"] if args.train_federated else model,

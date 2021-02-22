@@ -1462,19 +1462,33 @@ def secure_aggregation_epoch(
                     output = models[worker.id](data)
                     loss = loss_fns[worker.id](output, target)
                     loss.backward()
+                    if args.cuda:
+                        global_norm = torch.stack(
+                            [
+                                param.grad.copy().detach().norm(2)
+                                for param in models[worker.id].parameters()
+                                if param.requires_grad
+                            ]
+                        ).norm(2)
+                        clip_norm = torch.clamp(
+                            args.max_grad_norm / (global_norm + 1e-6), max=1.0
+                        )
                     with torch.no_grad():
                         # torch internally checks if the parameter requires grad
                         # and only clips the ones that do, so we don't need to check.
                         # torch also clips by 'global norm', see https://arxiv.org/abs/1211.5063
                         # clips inplace and detached from the computation graph
-                        torch.nn.utils.clip_grad_norm_(
-                            models[worker.id].parameters(), args.max_grad_norm
-                        )
+                        if not args.cuda:
+                            torch.nn.utils.clip_grad_norm_(
+                                models[worker.id].parameters(), args.max_grad_norm
+                            )
                         # Since we are operating on microbatches in this case
                         # we accumulate the clipped microbatch gradients into
                         # a container to average them later
                         # then we discard the original gradient for safety
                         for param in models[worker.id].parameters():
+                            if args.cuda:
+                                param.grad.mul_(clip_norm)
                             if hasattr(param, "accumulated_grads"):
                                 param.accumulated_grads.append(
                                     param.grad.copy().detach()
