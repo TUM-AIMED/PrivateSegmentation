@@ -136,4 +136,4 @@ unencrypted_inference_http:
 
 # Hyperparam-search 
 private_seg_search: 
-	python torchlib/find_config_seg.py --trial_name "unet_resnet18_pretrained_local_1" --data_dir data/MSD/Task03_Liver --visualize
+	python torchlib/find_config_seg.py --trial_name "monet_pretrained_local_1" --data_dir data/MSD/Task03_Liver 
