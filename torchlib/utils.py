@@ -1622,7 +1622,9 @@ def secure_aggregation_epoch(
     if args.differentially_private:
         epsila = []
         for worker in dataloaders.keys():
-            sample_size = len(dataloaders[worker].federated_dataset)
+            sample_size = (
+                len(dataloaders[worker].federated_dataset) / args.repetitions_dataset
+            )
             if args.batch_size / sample_size > 1.0:
                 raise ValueError(
                     f"Batch size ({args.batch_size}) exceeds the dataset size ({sample_size}) on worker {worker.id}."
@@ -1641,7 +1643,7 @@ def secure_aggregation_epoch(
                 f"[{worker.id}]\t"
                 f"(ε = {epsilon:.2f}, δ = {args.target_delta}) for α = {best_alpha}"
             )
-        epsilon = max(epsila)
+        epsilon = np.mean(epsila)
     else:
         epsilon = 0
 
