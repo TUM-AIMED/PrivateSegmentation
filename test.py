@@ -7,6 +7,9 @@ import torch
 import configparser
 import argparse
 import albumentations as a
+from matplotlib import pyplot as plt
+from seaborn import violinplot, set_theme
+from pandas import DataFrame
 from torchvision import datasets, transforms, models
 from argparse import Namespace
 from tqdm import tqdm
@@ -51,6 +54,11 @@ if __name__ == "__main__":
     parser.add_argument("--cuda", action="store_true", help="Use CUDA acceleration.")
     parser.add_argument(
         "--segmentation", action="store_true", help="Evaluate segmentation model"
+    )
+    parser.add_argument(
+        "--optimize_threshold",
+        action="store_true",
+        help="Find optimal threshold for scores. Only valid on val set.",
     )
     cmd_args = parser.parse_args()
 
@@ -167,6 +175,7 @@ if __name__ == "__main__":
     test_loader = torch.utils.data.DataLoader(
         testset, batch_size=1, shuffle=True, **kwargs
     )
+    # args.model = "unet_mobilenet_v2"
     if args.model == "unet":
         warn(
             "Pure UNet is deprecated. Please specify backbone (unet_resnet18, unet_mobilenet_v2, unet_vgg11_bn)",
@@ -204,10 +213,10 @@ if __name__ == "__main__":
             "pooling": args.pooling_type,
         }
     # Segmentation
-    elif args.model == "SimpleSegNet":
-        model_type = SimpleSegNet
-        # no params for now
-        model_args = {}
+    # elif args.model == "SimpleSegNet":
+    #     model_type = SimpleSegNet
+    #     # no params for now
+    #     model_args = {}
     elif "unet" in args.model:
         backbone = "_".join(
             args.model.split("_")[1:]
@@ -274,21 +283,103 @@ if __name__ == "__main__":
     total_scores = torch.cat(total_scores).cpu().squeeze()  # pylint: disable=no-member
 
     if cmd_args.segmentation:
+        diceloss = smp.utils.losses.DiceLoss(eps=1e-7)
+        if cmd_args.optimize_threshold:
+            thresholds = [i / 10.0 for i in range(1, 9)]
+            dicescores = np.asarray(
+                [
+                    np.mean(
+                        [
+                            1.0
+                            - diceloss(
+                                torch.where(
+                                    total_scores[i] < thresh,
+                                    torch.zeros_like(total_scores[i]),
+                                    torch.ones_like(total_scores[i]),
+                                ),
+                                total_target[i],
+                            ).item()
+                            for i in tqdm(
+                                range(total_target.shape[0]),
+                                total=total_target.shape[0],
+                                leave=False,
+                            )
+                        ]
+                    )
+                    for thresh in tqdm(
+                        thresholds,
+                        total=len(thresholds),
+                        leave=False,
+                        desc="optimizing thresholds",
+                    )
+                ]
+            )
+            print(
+                f"Best dice score was {np.max(dicescores)*100.0:.2f} @ {thresholds[np.argmax(dicescores)]}"
+            )
+            print(
+                f"Overall scores @ threshold levels: {[*zip(thresholds, dicescores)]}"
+            )
+            threshold = thresholds[np.argmax(dicescores)]
+        else:
+            threshold = 0.5
         total_pred = torch.where(
-            total_scores < 0.5,
+            total_scores < threshold,
             torch.zeros_like(total_scores),
             torch.ones_like(total_scores),
         )
-        diceloss = smp.utils.losses.DiceLoss(eps=1e-7)
+        losses = [
+            diceloss(total_scores[i], total_target[i]).item()
+            for i in tqdm(
+                range(total_target.shape[0]), total=total_target.shape[0], leave=False
+            )
+        ]
+        scores = [
+            1.0 - diceloss(total_pred[i], total_target[i]).item()
+            for i in tqdm(
+                range(total_target.shape[0]), total=total_target.shape[0], leave=False
+            )
+        ]
         iou = smp.utils.metrics.IoU()(total_pred, total_target)
         # fscore = smp.utils.metrics.Fscore()(total_pred, total_target)
-        print(f"Dice Loss: {diceloss(total_scores, total_target)*100.0:.2f}%")
-        print(f"Dice Score: {(1.0-diceloss(total_pred, total_target))*100.0:.2f}%")
+        print(f"Dice Loss: {np.mean(losses)*100.0:.2f}%")
+        print(f"Dice Score @ threshold {threshold}: {np.mean(scores)*100.0:.2f}%")
         print(f"IoU: {iou*100.0:.2f}%")
         # print(f"Fscore: {fscore*100.0:.2f}%")
+
+        interesting_idcs = np.argsort(
+            np.asarray(scores)
+        )  # could be more efficient using argpartition but this is simple and doesn't really matter for this number of array entries
+        interesting_idcs = np.concatenate([interesting_idcs[:5], interesting_idcs[-5:]])
+
         plot_imgs(
-            imgs[:10], total_target[:10], total_pred[:10]
-        )  # , savefig="test.png")
+            imgs[interesting_idcs],
+            total_target[interesting_idcs],
+            total_pred[interesting_idcs],
+            savefig="test.png",
+        )
+
+        # plt.clf()
+        # set_theme(style="whitegrid")
+        # fig, ax = plt.subplots(figsize=(10, 5))
+        # ax.set_ylim(-0.1, 1.1)
+        # violinplot(
+        #     data=scores, ax=ax  # DataFrame({"scores": scores, "losses": losses})
+        # )
+        # plt.savefig("violin.png")
+        # global labels
+        # labels = []
+
+        # def add_label(violin, label):
+        #     color = violin["bodies"][0].get_facecolor().flatten()
+        #     labels.append((mpatches.Patch(color=color), label))
+
+        # plt.clf()
+        # plt.violinplot(scores)
+        # plt.violinplot(losses)
+        # plt.legend(*zip(*labels))
+        # plt.savefig("violin.png")
+        # plt.show()
         exit()
         total_target = total_target.flatten().numpy().astype(np.int)
         total_scores = total_scores.flatten().numpy()
