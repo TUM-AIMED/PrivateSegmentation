@@ -89,7 +89,7 @@ def _batchnorm_to_instancenorm(module: nn.modules.batchnorm._BatchNorm) -> nn.Mo
 
 
 def _batchnorm_to_bn_without_stats(
-    module: nn.modules.batchnorm._BatchNorm, keep_running_stats: bool = True
+    module: nn.modules.batchnorm._BatchNorm,
 ) -> nn.Module:
     m = nn.BatchNorm2d(
         module.num_features,
