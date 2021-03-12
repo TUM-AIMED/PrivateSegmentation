@@ -1,9 +1,16 @@
 import torch
-from torch.utils.data import SequentialSampler, RandomSampler, BatchSampler
+from torch.utils.data import (
+    SequentialSampler,
+    RandomSampler,
+    BatchSampler,
+    WeightedRandomSampler,
+)
 from torch._six import string_classes, int_classes, container_abcs
 
 import logging
 import math
+import numpy as np
+
 
 numpy_type_map = {
     "float64": torch.DoubleTensor,
@@ -67,7 +74,8 @@ class _DataLoaderIter(object):
 
         # Create a sample iterator for each worker
         self.sample_iter = {
-            worker: iter(batch_sampler) for worker, batch_sampler in loader.batch_samplers.items()
+            worker: iter(batch_sampler)
+            for worker, batch_sampler in loader.batch_samplers.items()
         }
 
     def __len__(self):
@@ -82,7 +90,9 @@ class _DataLoaderIter(object):
 
         try:
             indices = next(self.sample_iter[worker])
-            batch = self.collate_fn([self.federated_dataset[worker][i] for i in indices])
+            batch = self.collate_fn(
+                [self.federated_dataset[worker][i] for i in indices]
+            )
             return batch
         # All the data for this worker has been used
         except StopIteration:
@@ -133,7 +143,9 @@ class _DataLoaderOneWorkerIter(object):
 
         try:
             indices = next(self.sample_iter)
-            batch = self.collate_fn([self.federated_dataset[self.worker][i] for i in indices])
+            batch = self.collate_fn(
+                [self.federated_dataset[self.worker][i] for i in indices]
+            )
             return batch
         # All the data for this worker has been used
         except StopIteration:
@@ -154,6 +166,40 @@ class _DataLoaderOneWorkerIter(object):
     def stop(self):
         self.worker = None
         raise StopIteration
+
+
+class PoissonBatchSampler(torch.utils.data.Sampler):
+    """
+    Poisson Sampler to satisfy privacy accounting. Produces uneven batch sizes by design.
+    Although not 100% correct, this sampler will never produce an empty batch to not crash
+    the training.
+    """
+
+    def __init__(self, sampler, batch_size, drop_last):
+        self.sampler = sampler
+        self.batch_size = batch_size
+        self.sample_size = len(self.sampler)
+        self.drop_last = drop_last
+        self.sample_rate = self.batch_size / self.sample_size
+
+    def __iter__(self):
+        s_idcs = np.array(list(self.sampler))
+        for _ in range(len(self)):
+            batch = []
+            while len(batch) == 0:
+                batch = s_idcs[
+                    np.random.binomial(1, self.sample_rate, size=len(s_idcs)).astype(
+                        np.bool
+                    )
+                ]
+            np.random.shuffle(batch)
+            yield batch.tolist()
+
+    def __len__(self):
+        if self.drop_last:
+            return len(self.sampler) // self.batch_size
+        else:
+            return (len(self.sampler) + self.batch_size - 1) // self.batch_size
 
 
 class FederatedDataLoader(object):
@@ -191,6 +237,7 @@ class FederatedDataLoader(object):
         drop_last=False,
         collate_fn=default_collate,
         iter_per_worker=False,
+        poisson=False,
         **kwargs,
     ):
         if len(kwargs) > 0:
@@ -209,17 +256,26 @@ class FederatedDataLoader(object):
         self.batch_size = batch_size
         self.drop_last = drop_last
         self.collate_fn = collate_fn
-        self.iter_class = _DataLoaderOneWorkerIter if iter_per_worker else _DataLoaderIter
+        self.iter_class = (
+            _DataLoaderOneWorkerIter if iter_per_worker else _DataLoaderIter
+        )
 
         # Build a batch sampler per worker
         self.batch_samplers = {}
         for worker in self.workers:
+            """Behold the case for a switch-case statement in Python."""
             data_range = range(len(federated_dataset[worker]))
-            if shuffle:
+            if shuffle and not poisson:  # user wants "regular" permutation sampling
                 sampler = RandomSampler(data_range)
-            else:
+                batch_sampler = BatchSampler(sampler, batch_size, drop_last)
+            elif shuffle and poisson:  # user wants poisson
                 sampler = SequentialSampler(data_range)
-            batch_sampler = BatchSampler(sampler, batch_size, drop_last)
+                batch_sampler = PoissonBatchSampler(sampler, batch_size, drop_last)
+            elif not (shuffle or poisson):  # user wants serial sampling
+                sampler = SequentialSampler(data_range)
+                batch_sampler = BatchSampler(sampler, batch_size, drop_last)
+            else:  # user asked for poisson without shuffling
+                raise ValueError("The Poisson sampling procedure shuffles by default.")
             self.batch_samplers[worker] = batch_sampler
 
         if iter_per_worker:

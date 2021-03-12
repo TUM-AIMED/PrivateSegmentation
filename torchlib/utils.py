@@ -179,10 +179,13 @@ class Arguments:
             "vgg16",
             "SimpleSegNet",
             "MoNet",
-            "unet",
+            "unet_resnet18",
+            "unet_vgg11_bn",
+            "unet_mobilenet_v2",
         ]  # Segmentation
         self.pooling_type = config.get("config", "pooling_type", fallback="max")
         self.pretrained = config.getboolean("config", "pretrained")  # , fallback=False)
+        self.pretrained_path = cmd_args.pretrained_path
         self.weight_decay = config.getfloat("config", "weight_decay")  # , fallback=0.0)
         self.weight_classes = config.getboolean(
             "config", "weight_classes"
@@ -297,6 +300,9 @@ class Arguments:
             assert self.train_federated, "If you use websockets it must be federated"
         self.num_threads = config.getint("system", "num_threads", fallback=0)
         self.dump_gradients_every = cmd_args.dump_gradients_every
+        self.print_gradient_norm_every = config.getint(
+            "DP", "print_gradient_norm_every", fallback=-1
+        )
 
     @classmethod
     def from_namespace(cls, args):
@@ -952,7 +958,20 @@ def setup_pysyft(args, hook, verbose=False):
             batch_size=args.batch_size,
             shuffle=True,
             drop_last=args.differentially_private,
+            poisson=args.differentially_private,  # See below
         )
+        """
+        The original implementation of DP-SGD by Abadi et al. (https://arxiv.org/abs/1607.00133) relies
+        on the moments accountant to perform privacy budgeting. We are using the RDP accountant 
+        (https://arxiv.org/pdf/1908.10530) which provides the same guarantees. Both implementations 
+        assume Poisson sampling of the minibatches. Instead of shuffling, then serially iterating through
+        the dataset, Poisson sampling randomly selects a "lot" (original wording) of samples with probability
+        L/n. In the infinite limit, the expectation of the batch size is identical to args.batch_size, but
+        the individual batches are neither exactly that large nor identical. This is why we are patching
+        Syft's DataLoader to include a Poisson sampler in order to conform fully to the assumptions of the
+        RDP accountant.
+        """
+
         train_loader[workers[worker]] = tl
     means = [m[0] for m in grid.search("#datamean").values()]
     stds = [s[0] for s in grid.search("#datastd").values()]
@@ -1439,19 +1458,33 @@ def secure_aggregation_epoch(
                     output = models[worker.id](data)
                     loss = loss_fns[worker.id](output, target)
                     loss.backward()
+                    if args.cuda:
+                        global_norm = torch.stack(
+                            [
+                                param.grad.copy().detach().norm(2)
+                                for param in models[worker.id].parameters()
+                                if param.requires_grad
+                            ]
+                        ).norm(2)
+                        clip_norm = torch.clamp(
+                            args.max_grad_norm / (global_norm + 1e-6), max=1.0
+                        )
                     with torch.no_grad():
                         # torch internally checks if the parameter requires grad
                         # and only clips the ones that do, so we don't need to check.
                         # torch also clips by 'global norm', see https://arxiv.org/abs/1211.5063
                         # clips inplace and detached from the computation graph
-                        torch.nn.utils.clip_grad_norm_(
-                            models[worker.id].parameters(), args.max_grad_norm
-                        )
+                        if not args.cuda:
+                            torch.nn.utils.clip_grad_norm_(
+                                models[worker.id].parameters(), args.max_grad_norm
+                            )
                         # Since we are operating on microbatches in this case
                         # we accumulate the clipped microbatch gradients into
                         # a container to average them later
                         # then we discard the original gradient for safety
                         for param in models[worker.id].parameters():
+                            if args.cuda:
+                                param.grad.mul_(clip_norm)
                             if hasattr(param, "accumulated_grads"):
                                 param.accumulated_grads.append(
                                     param.grad.copy().detach()
@@ -1585,7 +1618,9 @@ def secure_aggregation_epoch(
     if args.differentially_private:
         epsila = []
         for worker in dataloaders.keys():
-            sample_size = len(dataloaders[worker].federated_dataset)
+            sample_size = (
+                len(dataloaders[worker].federated_dataset) / args.repetitions_dataset
+            )
             if args.batch_size / sample_size > 1.0:
                 raise ValueError(
                     f"Batch size ({args.batch_size}) exceeds the dataset size ({sample_size}) on worker {worker.id}."
@@ -1604,7 +1639,7 @@ def secure_aggregation_epoch(
                 f"[{worker.id}]\t"
                 f"(ε = {epsilon:.2f}, δ = {args.target_delta}) for α = {best_alpha}"
             )
-        epsilon = max(epsila)
+        epsilon = np.mean(epsila)
     else:
         epsilon = 0
 
@@ -1623,7 +1658,12 @@ def train(  # never called on websockets
     vis_params=None,
     verbose=True,
     gradient_dump=None,
+    alphas=None,
 ):
+
+    for param in model.parameters():
+        if param.requires_grad:
+            param.accumulated_grads = []
     model.train()
     if args.mixup:
         mixup = MixUp(λ=args.mixup_lambda, p=args.mixup_prob)
@@ -1632,27 +1672,105 @@ def train(  # never called on websockets
     L = len(train_loader)
     div = 1.0 / float(L)
     avg_loss = []
-    for batch_idx, (data, target) in tqdm.tqdm(
-        enumerate(train_loader),
-        leave=False,
-        desc="training epoch {:d}".format(epoch),
-        total=L + 1,
+    for batch_idx, (data, target) in (
+        tqdm.tqdm(
+            enumerate(train_loader),
+            leave=False,
+            desc="training epoch {:d}".format(epoch),
+            total=L + 1,
+        )
+        if verbose
+        else enumerate(train_loader)
     ):
         # TODO: Only for MSD without preprocessing
         # res = data.shape[-1]
         # data, target = data.view(-1, 1, res, res).to(device), target.view(-1, res, res).to(device)
         data, target = data.to(device), target.to(device)
+        if args.differentially_private and args.batch_size > args.microbatch_size:
+            for i in range(0, data.shape[0], args.microbatch_size,):
+                d_i, t_i = (
+                    data[i : i + args.microbatch_size],
+                    target[i : i + args.microbatch_size],
+                )
 
-        if args.mixup:
+                output = model(d_i)
+                loss = loss_fn(output, t_i)
+                loss.backward()
+                with torch.no_grad():
+                    # torch internally checks if the parameter requires grad
+                    # and only clips the ones that do, so we don't need to check.
+                    # torch also clips by 'global norm', see https://arxiv.org/abs/1211.5063
+                    # clips inplace and detached from the computation graph
+                    torch.nn.utils.clip_grad_norm_(
+                        model.parameters(), args.max_grad_norm
+                    )
+                    # Since we are operating on microbatches in this case
+                    # we accumulate the clipped microbatch gradients into
+                    # a container to average them later
+                    # then we discard the original gradient for safety
+                    for param in model.parameters():
+                        if hasattr(param, "accumulated_grads"):
+                            param.accumulated_grads.append(param.grad.clone().detach())
+                            param.grad.zero_()
             with torch.no_grad():
-                target = oh_converter(target)
-                data, target = mixup((data, target))
-        optimizer.zero_grad()
-        output = model(data)
-        loss = loss_fn(output, target)
+                # at this point, we have the accumulated gradients
+                # and need to add noise calibrated by the norm
+                # larger microbatches get more noise
+                for param in model.parameters():
+                    if param.requires_grad:  # only parameters we clipped get noise
+                        noise = (
+                            torch.normal(
+                                0,
+                                args.noise_multiplier * args.max_grad_norm,
+                                size=param.grad.shape,
+                            )
+                            * (args.microbatch_size / args.batch_size)
+                        ).to(device)
+                        param.grad.add_(
+                            torch.mean(  # pylint:disable=no-member
+                                torch.stack(  # pylint:disable=no-member
+                                    param.accumulated_grads, dim=0
+                                ),
+                                dim=0,
+                            )
+                            + noise
+                        )
+                        param.accumulated_grads = (
+                            []
+                        )  # clean up the accumulated gradients
+        elif args.differentially_private and args.batch_size == args.microbatch_size:
 
-        loss.backward()
+            pred = model(data)
+            loss = loss_fn(pred, target)
+            loss.backward()
+            # here we are operating on the special case where the microbatch
+            # is the same size as the minibatch
+            # we don't need to accumulate gradients manually and can save one loop
+            # but the gradient gets much more noise to compensate
+            with torch.no_grad():
+                torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+                for param in model.parameters():
+                    noise = torch.normal(
+                        0,
+                        args.noise_multiplier * args.max_grad_norm,
+                        size=param.grad.shape,
+                    )  # no more scaling by microbatch size here
+                    param.grad.add_(noise)
+        else:
+            data, target = data.to(device), target.to(device)
+
+            if args.mixup:
+                with torch.no_grad():
+                    target = oh_converter(target)
+                    data, target = mixup((data, target))
+            optimizer.zero_grad()
+            output = model(data)
+            loss = loss_fn(output, target)
+
+            loss.backward()
         optimizer.step()
+        if args.differentially_private:
+            model.total_dp_steps += 1
         if batch_idx % args.log_interval == 0:
             if args.visdom:
                 vis_params["vis"].line(
@@ -1669,15 +1787,52 @@ def train(  # never called on websockets
             steps = epoch * len(train_loader) + batch_idx
             if steps % args.dump_gradients_every == 0:
                 gradient_dump[steps] = [
-                    param.grad.detach() for param in model.parameters()
+                    param.grad.detach().cpu() for param in model.parameters()
                 ]
+        if args.print_gradient_norm_every > 0:
+            steps = epoch * len(train_loader) + batch_idx
+            if steps % args.print_gradient_norm_every == 0:
+                if args.dump_gradients_every and steps in gradient_dump:
+                    norm = torch.stack(
+                        [x_i.flatten().norm(2) for x_i in gradient_dump[steps]]
+                    ).norm(2)
+                else:
+                    norm = torch.stack(
+                        [
+                            param.grad.detach().cpu().flatten().norm(2)
+                            for param in model.parameters()
+                        ]
+                    ).norm()
+                print(f"Gradient norm: {norm}")
     if args.differentially_private:
-        epsilon, best_alpha = optimizer.privacy_engine.get_privacy_spent(
-            args.target_delta
+        sample_size = len(train_loader.dataset)
+        if args.batch_size / sample_size > 1.0:
+            raise ValueError(
+                f"Batch size ({args.batch_size}) exceeds the dataset size ({sample_size}) on worker {worker.id}."
+                "This breaks privacy accounting."
+                "Please select a batch size that's at most equal to the dataset size on the worker."
+            )
+        epsilon, best_alpha = get_privacy_spent(
+            target_delta=args.target_delta,
+            steps=model.total_dp_steps,
+            alphas=alphas,
+            noise_multiplier=args.noise_multiplier,
+            sample_rate=args.batch_size / sample_size,
         )
-        print(f"(ε = {epsilon:.2f}, δ = {args.target_delta}) for α = {best_alpha}")
+
+        # best alpha > .9 percentile or <.1 percentile more alphas needed
+        if verbose:
+            print(
+                f"(ε = {epsilon:.2f}, δ = {args.target_delta}) for α = {best_alpha} (Loss: {np.mean(avg_loss)}"
+            )
     else:
         epsilon = 0
+    #     epsilon, best_alpha = optimizer.privacy_engine.get_privacy_spent(
+    #         args.target_delta
+    #     )
+    #     print(f"(ε = {epsilon:.2f}, δ = {args.target_delta}) for α = {best_alpha}")
+    # else:
+    #     epsilon = 0
     if not args.visdom and verbose:
         print("Train Epoch: {} \tLoss: {:.6f}".format(epoch, np.mean(avg_loss),))
     return model, epsilon, gradient_dump
@@ -1862,13 +2017,12 @@ def test(
             env=vis_params["vis_env"],
         )
     if args.bin_seg:
-        final_dice = torch.mean(torch.stack(true_dice)).item() 
+        final_dice = torch.mean(torch.stack(true_dice)).item()
         if verbose:
-            print(
-                f"True Dice Score @ threshold 0.5: {final_dice:.2f}"
-            )
-            # print(f"Dice score on test set: {(1.0 - test_loss)*100.0:.2f}%")
-        return test_loss, final_dice
+            print(f"True Dice Score @ threshold 0.5: {100.0*final_dice:.2f}%")
+        test_loss = test_loss.cpu().detach().item()
+        test_loss, objective = test_loss, final_dice
+        return test_loss, objective
 
     if args.encrypted_inference:
         objective = 100.0 * TP / (len(val_loader) * args.test_batch_size)
@@ -1914,10 +2068,9 @@ def test(
             )
             roc_auc = 0.0
 
-
         # TODO: other according value when full stats_table is implemented again
         #       use dice as objective instead of matthews for bin_seg
-        #objective = torch.mean(torch.stack(true_dice)).cpu().item()
+        # objective = torch.mean(torch.stack(true_dice)).cpu().item()
 
         matthews_coeff = mt.matthews_corrcoef(total_target, total_pred)
         objective = 100.0 * matthews_coeff

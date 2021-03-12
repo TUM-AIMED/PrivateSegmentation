@@ -7,7 +7,7 @@ from torch import nn
 from torch.hub import load_state_dict_from_url
 from numpy.random import seed as npseed
 from random import seed as rseed
-import os, pickle, joblib
+import os, pickle
 
 
 model_urls = {
@@ -159,6 +159,7 @@ def make_layers(cfg, batch_norm=False, in_channels=3, pooling="avg"):
             in_channels = v
     return nn.Sequential(*layers)
 
+
 def _vgg(
     arch,
     cfg,
@@ -168,7 +169,7 @@ def _vgg(
     in_channels=3,
     pooling="avg",
     num_classes=1000,
-    **kwargs
+    **kwargs,
 ):
     if pretrained:
         kwargs["init_weights"] = False
@@ -177,7 +178,7 @@ def _vgg(
         make_layers(
             cfgs[cfg], batch_norm=batch_norm, in_channels=in_channels, pooling=pooling
         ),
-        **kwargs
+        **kwargs,
     )
     if pretrained:
         state_dict = load_state_dict_from_url(model_urls[arch], progress=progress)
@@ -212,7 +213,7 @@ def vgg16(pretrained=False, progress=True, in_channels=3, pooling="avg", **kwarg
         progress,
         in_channels=in_channels,
         pooling=pooling,
-        **kwargs
+        **kwargs,
     )
 
 
@@ -512,7 +513,7 @@ def resnet18(pretrained=False, progress=True, in_channels=3, pooling="avg", **kw
         progress,
         in_channels=in_channels,
         pooling=pooling,
-        **kwargs
+        **kwargs,
     )
 
 
@@ -532,7 +533,7 @@ def resnet34(pretrained=False, progress=True, in_channels=3, pooling="avg", **kw
         progress,
         in_channels=in_channels,
         pooling=pooling,
-        **kwargs
+        **kwargs,
     )
 
 
@@ -745,18 +746,19 @@ conv_at_resolution = {28: ConvNetMNIST, 224: ConvNet224, 512: ConvNet512}
 
 from collections import OrderedDict
 
-class SimpleSegNet(nn.Module): 
-    def __init__(self): 
-        super(SimpleSegNet, self).__init__() 
+
+class SimpleSegNet(nn.Module):
+    def __init__(self):
+        super(SimpleSegNet, self).__init__()
 
         # Take pretrained feature extractor - pretrained vgg11 on ImageNet (small for prototyping)
-        #self.features = _vgg(arch="vgg11", cfg="A", batch_norm=False, pretrained=True, progress=True, num_classes=23)
+        # self.features = _vgg(arch="vgg11", cfg="A", batch_norm=False, pretrained=True, progress=True, num_classes=23)
 
-        # get VGG using existing functions 
+        # get VGG using existing functions
 
-        # problem?! corrupted file - invalid checksum 
-        #arch = "vgg11"
-        #cfg = "A"
+        # problem?! corrupted file - invalid checksum
+        # arch = "vgg11"
+        # cfg = "A"
 
         arch = "vgg16"
         cfg = "D"
@@ -764,47 +766,55 @@ class SimpleSegNet(nn.Module):
         batch_norm = False
         in_channels = 3
         pooling = "avg"
-        progress = True 
-        #num_classes = 23
+        progress = True
+        # num_classes = 23
         kwargs = {}
         kwargs["init_weights"] = False
 
         feature_extractor = VGG(
             make_layers(
-                cfgs[cfg], batch_norm=batch_norm, in_channels=in_channels, pooling=pooling
+                cfgs[cfg],
+                batch_norm=batch_norm,
+                in_channels=in_channels,
+                pooling=pooling,
             ),
-            **kwargs
+            **kwargs,
         )
 
         state_dict = load_state_dict_from_url(model_urls[arch], progress=progress)
         feature_extractor.load_state_dict(state_dict)
 
         # create very simple segmentation net using nn.Upsample()
-        
+
         # res of MSRC-v2 pics
-        H, W = 240, 240 
+        H, W = 240, 240
 
-        self.model = nn.Sequential(OrderedDict([
-                                   ('decoder', nn.Sequential(feature_extractor.features)), 
-                                   ('bridge_conv', nn.Conv2d(512, 512, kernel_size=(1, 1))), 
-                                   ('bridge_relu', nn.ReLU()), 
-                                   ('encoder_1', nn.Upsample(size=(int(H/4), int(W/2)))), 
-                                   ('encoder_1_conv', nn.Conv2d(512, 256, kernel_size=(1, 1))), 
-                                   ('encoder_1_relu', nn.ReLU()),
-                                   ('encoder_2', nn.Upsample(size=(int(H/2), int(W/2)))), 
-                                   ('encoder_2_conv', nn.Conv2d(256, 128, kernel_size=(1, 1))), 
-                                   ('encoder_2_relu', nn.ReLU()),
-                                   ('encoder_3', nn.Upsample(size=(H, W))), 
-                                   ('encoder_3_conv', nn.Conv2d(128, 23, kernel_size=(1, 1))), 
-                                   ('encoder_3_relu', nn.ReLU())
-                                   ]))
+        self.model = nn.Sequential(
+            OrderedDict(
+                [
+                    ("decoder", nn.Sequential(feature_extractor.features)),
+                    ("bridge_conv", nn.Conv2d(512, 512, kernel_size=(1, 1))),
+                    ("bridge_relu", nn.ReLU()),
+                    ("encoder_1", nn.Upsample(size=(int(H / 4), int(W / 2)))),
+                    ("encoder_1_conv", nn.Conv2d(512, 256, kernel_size=(1, 1))),
+                    ("encoder_1_relu", nn.ReLU()),
+                    ("encoder_2", nn.Upsample(size=(int(H / 2), int(W / 2)))),
+                    ("encoder_2_conv", nn.Conv2d(256, 128, kernel_size=(1, 1))),
+                    ("encoder_2_relu", nn.ReLU()),
+                    ("encoder_3", nn.Upsample(size=(H, W))),
+                    ("encoder_3_conv", nn.Conv2d(128, 23, kernel_size=(1, 1))),
+                    ("encoder_3_relu", nn.ReLU()),
+                ]
+            )
+        )
 
-    def forward(self, x): 
+    def forward(self, x):
         out = self.model(x)
 
-        return out 
+        return out
 
-#from models.MoNet import MoNet
+
+# from models.MoNet import MoNet
 
 """
     MoNet - ported from TF 
@@ -812,72 +822,71 @@ class SimpleSegNet(nn.Module):
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F 
+import torch.nn.functional as F
 
-class ConvBnElu(nn.Module): 
+
+class ConvBnElu(nn.Module):
     """
-        Conv-Batchnorm-Elu block
+    Conv-Batchnorm-Elu block
     """
-    def __init__(
-        self,  
-        old_filters,
-        filters, 
-        kernel_size=3, 
-        strides=1, 
-        dilation_rate=1
-        ): 
+
+    def __init__(self, old_filters, filters, kernel_size=3, strides=1, dilation_rate=1):
         super(ConvBnElu, self).__init__()
 
         # Conv
         # 'SAME' padding => Output-Dim = Input-Dim/stride -> exact calculation: if uneven add more padding to the right
         # int() floors padding
-        # TODO: how to add asymmetric padding? tuple option for padding only specifies the different dims 
-        same_padding = int(dilation_rate*(kernel_size-1)*0.5)
+        # TODO: how to add asymmetric padding? tuple option for padding only specifies the different dims
+        same_padding = int(dilation_rate * (kernel_size - 1) * 0.5)
 
         # TODO: kernel_initializer="he_uniform",
 
         self.conv = nn.Conv2d(
-            in_channels=old_filters, 
-            out_channels=filters, 
-            kernel_size=kernel_size, 
-            stride=strides, 
-            padding=same_padding, 
-            dilation=dilation_rate, 
-            bias=False)
+            in_channels=old_filters,
+            out_channels=filters,
+            kernel_size=kernel_size,
+            stride=strides,
+            padding=same_padding,
+            dilation=dilation_rate,
+            bias=False,
+        )
 
         # BatchNorm
         self.batch_norm = nn.BatchNorm2d(filters)
 
-    def forward(self, x): 
+    def forward(self, x):
         out = self.conv(x)
         out = self.batch_norm(out)
         out = F.elu(out)
-        return out 
+        return out
 
-class deconv(nn.Module): 
+
+class deconv(nn.Module):
     """
-        Transposed Conv. with BatchNorm and ELU-activation
-        Deconv upsampling of x. Doubles x and y dimension and maintains z.
+    Transposed Conv. with BatchNorm and ELU-activation
+    Deconv upsampling of x. Doubles x and y dimension and maintains z.
     """
+
     def __init__(self, old_filters):
-        super(deconv, self).__init__() 
+        super(deconv, self).__init__()
 
         kernel_size = 4
         stride = 2
         dilation_rate = 1
 
         # TODO: how to add asymmetric padding? possibly use "output_padding here"
-        same_padding = int(dilation_rate*(kernel_size-1)*0.5)
+        same_padding = int(dilation_rate * (kernel_size - 1) * 0.5)
 
         # TODO: kernel_initializer="he_uniform",
 
         self.transp_conv = nn.ConvTranspose2d(
-            in_channels=old_filters, 
-            out_channels=old_filters, 
-            kernel_size=kernel_size, 
-            stride=stride, 
-            padding=same_padding, 
-            bias=False)
+            in_channels=old_filters,
+            out_channels=old_filters,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=same_padding,
+            bias=False,
+        )
 
         self.batch_norm = nn.BatchNorm2d(old_filters)
 
@@ -885,24 +894,21 @@ class deconv(nn.Module):
         out = self.transp_conv(x)
         out = self.batch_norm(out)
         out = F.elu(out)
-        return out 
+        return out
 
-class repeat_block(nn.Module): 
-    """ 
-        RDDC - Block
-        Reccurent conv block with decreasing kernel size. 
-        Makes use of atrous convolutions to make large kernel sizes computationally feasible
+
+class repeat_block(nn.Module):
+    """
+    RDDC - Block
+    Reccurent conv block with decreasing kernel size.
+    Makes use of atrous convolutions to make large kernel sizes computationally feasible
 
     """
-    def __init__(
-        self,  
-        in_filters,
-        out_filters, 
-        dropout=0.2
-        ): 
+
+    def __init__(self, in_filters, out_filters, dropout=0.2):
         super(repeat_block, self).__init__()
 
-        # Skip connection 
+        # Skip connection
         # TODO: Reformatting necessary?
 
         self.convBnElu1 = ConvBnElu(in_filters, out_filters, dilation_rate=4)
@@ -913,7 +919,7 @@ class repeat_block(nn.Module):
         self.dropout3 = nn.Dropout2d(dropout)
         self.convBnElu4 = ConvBnElu(out_filters, out_filters, dilation_rate=1)
 
-    def forward(self, x): 
+    def forward(self, x):
         skip1 = x
         out = self.convBnElu1(x)
         out = self.dropout1(out)
@@ -924,14 +930,14 @@ class repeat_block(nn.Module):
         out = self.dropout3(out)
         out = self.convBnElu4(out + skip2)
 
-        #TODO: In this implementation there was again a skip connection from first input, not shown in paper however? 
+        # TODO: In this implementation there was again a skip connection from first input, not shown in paper however?
         out = skip1 + out
         return out
 
 
-class MoNet(nn.Module): 
+class MoNet(nn.Module):
     def __init__(
-        self, 
+        self,
         input_shape=(1, 256, 256),
         output_classes=1,
         depth=2,
@@ -939,9 +945,9 @@ class MoNet(nn.Module):
         dropout_enc=0.2,
         dropout_dec=0.2,
         activation=None,
-        ):
+    ):
         super(MoNet, self).__init__()
-        
+
         # store param in case they're needed later
         self.input_shape = input_shape
         self.output_classes = output_classes
@@ -949,26 +955,32 @@ class MoNet(nn.Module):
         self.features = n_filters_init
         self.dropout_enc = dropout_enc
         self.dropout_dec = dropout_dec
-        
+
         # encoder
         encoder_list = []
 
         old_filters = 1
         features = n_filters_init
         for i in range(depth):
-            encoder_list.append([
-                f"Enc_ConvBnElu_Before_{i}", ConvBnElu(old_filters, features)
-                ])
+            encoder_list.append(
+                [f"Enc_ConvBnElu_Before_{i}", ConvBnElu(old_filters, features)]
+            )
             old_filters = features
-            encoder_list.append([
-                f"Enc_RDDC_{i}", repeat_block(old_filters, features, dropout=dropout_enc)
-                ])
-            encoder_list.append([
-                f"Enc_ConvBnElu_After_{i}", ConvBnElu(old_filters, features, kernel_size=4, strides=2)
-                ])
+            encoder_list.append(
+                [
+                    f"Enc_RDDC_{i}",
+                    repeat_block(old_filters, features, dropout=dropout_enc),
+                ]
+            )
+            encoder_list.append(
+                [
+                    f"Enc_ConvBnElu_After_{i}",
+                    ConvBnElu(old_filters, features, kernel_size=4, strides=2),
+                ]
+            )
             features *= 2
 
-        # ModulList instead of Sequential because we don't want the layers to be connected yet 
+        # ModulList instead of Sequential because we don't want the layers to be connected yet
         # we still need to add the skip connections. Dict to know when to add skip connection in forward
         self.encoder = nn.ModuleDict(encoder_list)
 
@@ -984,42 +996,46 @@ class MoNet(nn.Module):
         decoder_list = []
         for i in reversed(range(depth)):
             features //= 2
-            decoder_list.append([
-                f"Dec_deconv_Before_{i}", deconv(old_filters)
-                ])
-            # deconv maintains number of channels 
-            decoder_list.append([
-                f"Dec_ConvBnElu_{i}", ConvBnElu(old_filters, features)
-                ])
+            decoder_list.append([f"Dec_deconv_Before_{i}", deconv(old_filters)])
+            # deconv maintains number of channels
+            decoder_list.append(
+                [f"Dec_ConvBnElu_{i}", ConvBnElu(old_filters, features)]
+            )
             old_filters = features
-            decoder_list.append([
-                f"Dec_RDDC_{i}", repeat_block(old_filters, features, dropout=dropout_dec)
-                ])
+            decoder_list.append(
+                [
+                    f"Dec_RDDC_{i}",
+                    repeat_block(old_filters, features, dropout=dropout_dec),
+                ]
+            )
 
         self.decoder = nn.ModuleDict(decoder_list)
 
         # head
         head_list = []
         # TODO: kernel_initializer="he_uniform",
-        head_list.append(nn.Conv2d(
-            in_channels=old_filters, 
-            out_channels=output_classes, 
-            kernel_size=1, 
-            stride=1, 
-            bias=False))
+        head_list.append(
+            nn.Conv2d(
+                in_channels=old_filters,
+                out_channels=output_classes,
+                kernel_size=1,
+                stride=1,
+                bias=False,
+            )
+        )
 
         head_list.append(nn.BatchNorm2d(output_classes))
 
-        # TODO: Consider nn.logsoftmax --> works with NLLoss out of the box --> what we want to use. 
-        #if output_classes > 1:
+        # TODO: Consider nn.logsoftmax --> works with NLLoss out of the box --> what we want to use.
+        # if output_classes > 1:
         #    activation = nn.Softmax(dim=1)
-        #else:
+        # else:
         #    activation = nn.Sigmoid()
-        #head_list.append(activation)
+        # head_list.append(activation)
         # BCELoss doesn't include sigmoid layer (not as in CELoss)
-        # BCELoss can't handle negative number so no log-space 
-        #activation = nn.Sigmoid()
-        #head_list.append(activation)
+        # BCELoss can't handle negative number so no log-space
+        # activation = nn.Sigmoid()
+        # head_list.append(activation)
         # INSTEAD: Added BCEWithLogitsLoss which combines both in a numerically stable way sssss
 
         self.header = nn.Sequential(*head_list)
@@ -1030,45 +1046,46 @@ class MoNet(nn.Module):
         else:
             self.activation = None
 
-    def forward(self, x): 
+    def forward(self, x):
         skip = []
 
-        # encoder 
+        # encoder
         out = x
-        for key in self.encoder: 
+        for key in self.encoder:
             out = self.encoder[key](out)
-            if key == "RDDC": 
+            if key == "RDDC":
                 skip.append(out)
 
-        # bottleneck 
+        # bottleneck
         out = self.bottleneck(out)
 
         # decoder
-        for key in self.decoder: 
+        for key in self.decoder:
             out = self.decoder[key](out)
-            if key == "deconv": 
+            if key == "deconv":
                 # Concatenate along channel-dim (last dim)
-                # skip.pop() -> get last element and remove it 
+                # skip.pop() -> get last element and remove it
                 out = torch.cat((out, skip.pop()), dim=-1)
 
         # header
         out = self.header(out)
 
         if self.activation:
-             out = self.activation(out)
+            out = self.activation(out)
 
         return out
 
-def getMoNet(pretrained=False, **kwargs): 
+
+def getMoNet(pretrained=False, **kwargs):
     # preprocessing step due to version problem (model was saved from torch 1.7.1)
     # PRETRAINED_PATH = os.getcwd() + '/pretrained_models/monet_weights.pickle'
     # with open(PRETRAINED_PATH, 'rb') as handle:
     #     state_dict = pickle.load(handle)
     # Init. MoNet
     model = MoNet(**kwargs)
-    if pretrained: 
-        # load weights from storage 
-        #model.load_state_dict(torch.load(PRETRAINED_PATH))
-        state_dict = joblib.load(os.getcwd() + '/pretrained_models/monet_weights.dat')
-        model.load_state_dict(state_dict)
+    # if pretrained:
+    #     # load weights from storage
+    #     # model.load_state_dict(torch.load(PRETRAINED_PATH))
+    #     state_dict = joblib.load(os.getcwd() + "/pretrained_models/monet_weights.dat")
+    #     model.load_state_dict(state_dict)
     return model

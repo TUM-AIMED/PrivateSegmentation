@@ -88,6 +88,26 @@ def _batchnorm_to_instancenorm(module: nn.modules.batchnorm._BatchNorm) -> nn.Mo
     return matchDim()(module.num_features)
 
 
+def _batchnorm_to_bn_without_stats(
+    module: nn.modules.batchnorm._BatchNorm,
+) -> nn.Module:
+    m = nn.BatchNorm2d(
+        module.num_features,
+        module.eps,
+        module.momentum,
+        affine=True,
+        track_running_stats=False,
+    )
+    m.load_state_dict(
+        {
+            key: value
+            for key, value in module.state_dict().items()
+            if key in m.state_dict()
+        }
+    )
+    return m
+
+
 def _batchnorm_to_groupnorm(module: nn.modules.batchnorm._BatchNorm) -> nn.Module:
     """
     Converts a BatchNorm ``module`` to GroupNorm module.

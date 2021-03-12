@@ -71,27 +71,6 @@ class AlbumentationsTorchTransform:
             return img, mask
 
 
-class PoissonSampler(torch.utils.data.Sampler):
-    def __init__(self, num_examples, batch_size):
-        self.inds = np.arange(num_examples)
-        self.batch_size = batch_size
-        self.num_batches = int(np.ceil(num_examples / batch_size))
-        self.sample_rate = self.batch_size / (1.0 * num_examples)
-        super().__init__()
-
-    def __iter__(self):
-        for _ in range(self.num_batches):
-            batch_idxs = np.random.binomial(
-                n=1, p=self.sample_rate, size=len(self.inds)
-            )
-            batch = self.inds[batch_idxs.astype(np.bool)]
-            np.random.shuffle(batch)
-            yield batch
-
-    def __len__(self):
-        return self.num_batches
-
-
 class CombinedLoader:
     """Class that combines several data loaders and their extensions.
 
@@ -255,11 +234,7 @@ def create_albu_transform(args, mean, std):
                 ).astype(np.float32),
             )
         )
-    train_tf_albu = AlbumentationsTorchTransform(
-        a.Compose(
-            transformations,
-        )
-    )
+    train_tf_albu = AlbumentationsTorchTransform(a.Compose(transformations,))
     return train_tf_albu
 
 
@@ -276,9 +251,7 @@ def l1_sensitivity(query: Callable, d: tensor) -> float:
 
 
 def calc_mean_std(
-    dataset,
-    save_folder=None,
-    epsilon=None,
+    dataset, save_folder=None, epsilon=None,
 ):
     """
     Calculates the mean and standard deviation of `dataset` and
@@ -446,11 +419,7 @@ class ImageFolderFromCSV(torchdata.Dataset):
 
 class PPPP(torchdata.Dataset):
     def __init__(
-        self,
-        label_path="data/Labels.csv",
-        train=False,
-        transform=None,
-        seed=1,
+        self, label_path="data/Labels.csv", train=False, transform=None, seed=1,
     ):
         super().__init__()
         random.seed(seed)
@@ -499,8 +468,7 @@ class PPPP(torchdata.Dataset):
     def __compute_mean_std__(self):
 
         calc_mean_std(
-            self,
-            save_folder="data",
+            self, save_folder="data",
         )
 
 
@@ -805,14 +773,7 @@ class MSD_data(torchdata.Dataset):
                 )
             # creating label mask from bounding box dimensions
             label = create_3D_label(
-                b[0],
-                b[1],
-                b[2],
-                b[3],
-                b[4],
-                b[5],
-                label.shape[1],
-                label.shape[2],
+                b[0], b[1], b[2], b[3], b[4], b[5], label.shape[1], label.shape[2],
             )
 
         # cropping scan and label volumes to reduce the number of non-pancreas slices
@@ -1064,11 +1025,7 @@ if __name__ == "__main__":
     img.show()
 
     tf = transforms.Compose(
-        [
-            transforms.Resize(224),
-            transforms.CenterCrop(224),
-            transforms.ToTensor(),
-        ]
+        [transforms.Resize(224), transforms.CenterCrop(224), transforms.ToTensor(),]
     )
     ds = PPPP(train=True, transform=tf)
 

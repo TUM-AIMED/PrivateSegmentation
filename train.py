@@ -8,6 +8,7 @@ import shutil
 from datetime import datetime
 import time
 from warnings import warn
+from copy import deepcopy
 
 import numpy as np
 import syft as sy
@@ -56,14 +57,21 @@ from torchlib.utils import (
     setup_pysyft,
     calc_class_weights,
 )
-from sklearn.model_selection import train_test_split
 import segmentation_models_pytorch as smp
-from revision_scripts.module_modification import convert_batchnorm_modules
+from revision_scripts.module_modification import (
+    convert_batchnorm_modules,
+    _batchnorm_to_bn_without_stats,
+)
 from opacus import PrivacyEngine
-import pickle, joblib
+from joblib import load as joblibload
+
+from syft.frameworks.torch.fl.dataloader import PoissonBatchSampler
+from torch.utils.data import SequentialSampler
 
 
-def main(args, verbose=True, optuna_trial=None, cmd_args=None):
+def main(
+    args, verbose=True, optuna_trial=None, cmd_args=None, return_all_perfomances=False
+):
 
     use_cuda = args.cuda and torch.cuda.is_available()
     if args.deterministic and args.websockets:
@@ -81,14 +89,7 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
 
     device = torch.device("cuda" if use_cuda else "cpu")  # pylint: disable=no-member
 
-    kwargs = (
-        {
-            "num_workers": args.num_threads,
-            "pin_memory": True,
-        }
-        if use_cuda
-        else {}
-    )
+    kwargs = {"num_workers": args.num_threads, "pin_memory": True,} if use_cuda else {}
 
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     exp_name = "{:s}_{:s}_{:s}".format(
@@ -113,11 +114,7 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
             worker_names,
             crypto_provider,
             val_mean_std,
-        ) = setup_pysyft(
-            args,
-            hook,
-            verbose=verbose,
-        )
+        ) = setup_pysyft(args, hook, verbose=verbose,)
     else:
         if args.data_dir == "mnist":
             val_mean_std = torch.tensor(  # pylint:disable=not-callable
@@ -190,18 +187,14 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
 
             # transforms applied to get the stats: mean and val
             basic_tfs = [
-                a.Resize(
-                    args.inference_resolution,
-                    args.inference_resolution,
-                ),
+                a.Resize(args.inference_resolution, args.inference_resolution,),
                 a.RandomCrop(args.train_resolution, args.train_resolution),
                 a.ToFloat(max_value=255.0),
             ]
             stats_tf_imgs = AlbumentationsTorchTransform(a.Compose(basic_tfs))
             # dataset to calculate stats
             dataset = MSD_data_images(
-                args.data_dir + "/train",
-                transform=stats_tf_imgs,
+                args.data_dir + "/train", transform=stats_tf_imgs,
             )
             # get stats
             val_mean_std = calc_mean_std(dataset)
@@ -257,9 +250,7 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
             if not args.pretrained:
                 loader.change_channels(1)
             dataset = datasets.ImageFolder(
-                args.data_dir,
-                transform=stats_tf,
-                loader=loader,
+                args.data_dir, transform=stats_tf, loader=loader,
             )
             # TODO: issue #1 - this only creates two 2 new dimensions in case of three channels
             assert (
@@ -286,13 +277,19 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
         #     dataset,
         #     [int(ceil(total_L * (1.0 - fraction))), int(floor(total_L * fraction))],
         # )
-        train_loader = torch.utils.data.DataLoader(
-            dataset,
-            batch_size=args.batch_size,
-            shuffle=True,
-            drop_last=args.differentially_private,
-            **kwargs,
-        )
+        if args.differentially_private:
+            sampler = SequentialSampler(range(len(dataset)))
+            batch_sampler = PoissonBatchSampler(sampler, args.batch_size, True)
+            train_loader = torch.utils.data.DataLoader(
+                dataset,
+                batch_sampler=batch_sampler,
+                # sampler=sampler,
+                **kwargs,
+            )
+        else:
+            train_loader = torch.utils.data.DataLoader(
+                dataset, batch_size=args.batch_size, shuffle=True, **kwargs,
+            )
 
         # val_tf = [
         #     a.Resize(args.inference_resolution, args.inference_resolution),
@@ -305,10 +302,7 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
         # valset.dataset.transform = AlbumentationsTorchTransform(a.Compose(val_tf))
 
         val_loader = torch.utils.data.DataLoader(
-            valset,
-            batch_size=args.test_batch_size,
-            shuffle=True,
-            **kwargs,
+            valset, batch_size=args.test_batch_size, shuffle=True, **kwargs,
         )
         # del total_L, fraction
 
@@ -370,7 +364,12 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
         )
         vis_params = {"vis": vis, "vis_env": vis_env}
     # for the models that are loaded in directly (e.g. U-Net)
-    already_loaded = False
+    if args.model == "unet":
+        warn(
+            "Pure UNet is deprecated. Please specify backbone (unet_resnet18, unet_mobilenet_v2, unet_vgg11_bn)",
+            category=DeprecationWarning,
+        )
+        exit()
     if args.model == "vgg16":
         model_type = vgg16
         model_args = {
@@ -406,30 +405,27 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
         model_type = SimpleSegNet
         # no params for now
         model_args = {}
-    elif args.model == "unet":
+    elif "unet" in args.model:
+        backbone = "_".join(
+            args.model.split("_")[1:]
+        )  # remove the unet from the model str
         # because we don't call any function but directly create the model
-        already_loaded = True
         # preprocessing step due to version problem (model was saved from torch 1.7.1)
-        # resnet18 can be directly replaced by vgg11_bn and mobilenet_v2 
-        PRETRAINED_PATH = getcwd() + "/pretrained_models/unet_mobilenet_v2_weights.dat"
+        # resnet18 can be directly replaced by vgg11 and mobilenet
+        # PRETRAINED_PATH =  "/pretrained_models/unet_resnet18_weights.dat"
         model_args = {
-            "encoder_name": "mobilenet_v2",
+            "encoder_name": backbone,
             "classes": 1,
             "in_channels": 1,
             "activation": "sigmoid",
             "encoder_weights": None,
         }
-        model = smp.Unet(**model_args)
+        model_type = smp.Unet
         # model.encoder.conv1 = nn.Sequential(nn.Conv2d(1, 3, 1), model.encoder.conv1)
-        if args.pretrained:
-            # with open(PRETRAINED_PATH, "rb") as handle:
-            #     state_dict = pickle.load(handle)
-            state_dict = joblib.load(PRETRAINED_PATH)
-            model.load_state_dict(state_dict)
+
     elif args.model == "MoNet":
         model_type = getMoNet
         model_args = {
-            "pretrained": args.pretrained,
             "activation": "sigmoid",
         }
     else:
@@ -437,8 +433,15 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
             "Model name not understood. Please choose one of 'vgg16, 'simpleconv', resnet-18'."
         )
 
-    if not already_loaded:
-        model = model_type(**model_args)
+    model = model_type(**model_args)
+
+    if args.pretrained and (not args.pretrained_path is None):
+        # with open(getcwd() + args.pretrained_path, "rb") as handle:
+        #     state_dict = pickle.load(handle)
+        #     model.load_state_dict(state_dict)
+        state_dict = joblibload(args.pretrained_path)
+        model.load_state_dict(state_dict)
+    model.to(device)
 
     if args.train_federated:
         model = {
@@ -500,21 +503,27 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
         ALPHAS = [1 + x / 10.0 for x in range(1, 100)] + list(range(12, 64))
         if args.train_federated:
             for key, m in model.items():
-                model[key] = convert_batchnorm_modules(m)
+                model[key] = convert_batchnorm_modules(
+                    m, converter=_batchnorm_to_bn_without_stats
+                )
             for w in train_loader.keys():
                 if not hasattr(w, "total_dp_steps"):
                     setattr(w, "total_dp_steps", 0)
         else:
-            model = convert_batchnorm_modules(model)
-            privacy_engine = PrivacyEngine(
-                model,
-                batch_size=args.batch_size,  # recommended in opacus tutorial
-                sample_size=len(train_loader.dataset),
-                alphas=ALPHAS,
-                noise_multiplier=args.noise_multiplier,
-                max_grad_norm=args.max_grad_norm,
+            if not hasattr(model, "total_dp_steps"):
+                setattr(model, "total_dp_steps", 0)
+            # privacy_engine = PrivacyEngine(
+            #     model,
+            #     batch_size=args.batch_size,  # recommended in opacus tutorial
+            #     sample_size=len(train_loader.dataset),
+            #     alphas=ALPHAS,
+            #     noise_multiplier=args.noise_multiplier,
+            #     max_grad_norm=args.max_grad_norm,
+            # )
+            # privacy_engine.attach(optimizer)
+            model = convert_batchnorm_modules(
+                model, converter=_batchnorm_to_bn_without_stats
             )
-            privacy_engine.attach(optimizer)
 
     loss_args = {"weight": cw, "reduction": "mean"}
     if args.mixup or (args.weight_classes and args.train_federated):
@@ -598,7 +607,6 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
             m.to(device)
     else:
         model.to(device)
-
     test(
         args,
         model["local_model"] if args.train_federated else model,
@@ -612,6 +620,7 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
         verbose=verbose,
     )
     objectives = []
+    epsila = []
     model_paths = []
     times = []
     """if args.train_federated:
@@ -689,6 +698,7 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
                 vis_params=vis_params,
                 verbose=verbose,
                 gradient_dump=gradient_dump,
+                alphas=ALPHAS,
             )
         # except Exception as e:
         times.append(time.time() - epoch_start_time)
@@ -726,7 +736,10 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
 
             save_model(model, optimizer, model_path, args, epoch, val_mean_std)
             objectives.append(objective)
+            epsila.append(epsilon)
             model_paths.append(model_path)
+    if return_all_perfomances:
+        return_value = deepcopy(objectives), deepcopy(epsila)
     # reversal and formula because we want last occurance of highest value
     objectives = np.array(objectives[::-1])
     best_score_idx = np.argmax(objectives)
@@ -751,25 +764,24 @@ def main(args, verbose=True, optuna_trial=None, cmd_args=None):
     model.load_state_dict(state["model_state_dict"])
 
     shutil.copyfile(
-        best_model_file,
-        "model_weights/final_{:s}.pt".format(exp_name),
+        best_model_file, "model_weights/final_{:s}.pt".format(exp_name),
     )
     if args.save_file:
         save_config_results(
-            args,
-            objectives[best_score_idx],
-            timestamp,
-            args.save_file,
+            args, objectives[best_score_idx], timestamp, args.save_file,
         )
 
     # delete old model weights
-    for model_file in model_paths:
-        remove(model_file)
+    if not return_all_perfomances:
+        for model_file in model_paths:
+            remove(model_file)
 
     if args.dump_gradients_every:
         torch.save(gradient_dump, f"model_weights/gradient_dump_{exp_name}.pt")
-
-    return objectives[best_score_idx], epsilon
+    if return_all_perfomances:
+        return return_value
+    else:
+        return objectives[best_score_idx], epsilon
 
 
 if __name__ == "__main__":
@@ -829,6 +841,12 @@ if __name__ == "__main__":
         default=None,
         type=int,
         help="Dump gradients during training every n steps",
+    )
+    parser.add_argument(
+        "--pretrained_path",
+        default=None,
+        type=str,
+        help="Path to pretrained model weights that shall be used.",
     )
     cmd_args = parser.parse_args()
 
