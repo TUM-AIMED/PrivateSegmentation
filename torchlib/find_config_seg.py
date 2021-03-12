@@ -58,7 +58,7 @@ def objective(trial: opt.trial):
         dump_gradients_every=None,
         print_gradient_norm_every=-1,
         optimizer="Adam",
-        model="unet",
+        model="MoNet",
         pretrained=True,
         weight_classes=False,
         pooling_type="max",

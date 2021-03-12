@@ -6,6 +6,7 @@ import configparser
 import random
 import shutil
 from datetime import datetime
+import time
 from warnings import warn
 from copy import deepcopy
 
@@ -621,6 +622,7 @@ def main(
     objectives = []
     epsila = []
     model_paths = []
+    times = []
     """if args.train_federated:
         test_params = {
             "device": device,
@@ -664,6 +666,7 @@ def main(
                 env=vis_env,
             )
 
+        epoch_start_time = time.time()
         if args.train_federated:
             model, epsilon = train_federated(
                 args,
@@ -698,6 +701,7 @@ def main(
                 alphas=ALPHAS,
             )
         # except Exception as e:
+        times.append(time.time() - epoch_start_time)
 
         if (epoch % args.test_interval) == 0:
             _, objective = test(
@@ -745,9 +749,12 @@ def main(
     ) * args.test_interval  # actually -1 but we're switching to 1 indexed here
     best_model_file = model_paths[highest_score]
     print(
-        "Highest objective-score was {:.2f} in epoch {:d}".format(
+        "Highest objective-score was {:.2f} in epoch {:d}. \
+        \nTime per epoch - mean: {:.2f}s, std: {:.2f}s".format(
             objectives[best_score_idx],
             best_epoch * (args.repetitions_dataset if args.train_federated else 1),
+            np.mean(times), 
+            np.std(times),
         )
     )
     # load best model on val set
