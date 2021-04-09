@@ -176,6 +176,78 @@ def plot_imgs(
         plt.show()
 
 
+def plot_comparison(
+    image,
+    ground_truth,
+    mask1,
+    mask2,
+    nm_img_to_plot=10,
+    figsize=4,
+    alpha=0.5,
+    color="red",
+    savefig=None,
+    titles=["Original", "Ground Truth", "Prediction", "Comparison"],
+):
+    assert color in MASK_COLORS
+
+    if nm_img_to_plot > image.shape[0]:
+        nm_img_to_plot = image.shape[0]
+    im_id = 0
+    image_size = image.shape[1]
+
+    cols = 4
+    image = reshape_arr(image)
+    ground_truth = reshape_arr(ground_truth)
+    mask1 = reshape_arr(mask1)
+    mask2 = reshape_arr(mask2)
+
+    fig, axes = plt.subplots(
+        nm_img_to_plot,
+        cols,
+        figsize=(cols * figsize, nm_img_to_plot * figsize),
+        squeeze=False,
+    )
+    for i in range(len(titles)):
+        axes[0, i].set_title(titles[i], fontsize=15, fontname="Arial")
+    for m in range(0, nm_img_to_plot):
+        axes[m, 0].imshow(image[im_id], cmap=get_cmap(image))
+        axes[m, 0].set_axis_off()
+        axes[m, 1].imshow(image[im_id], cmap=get_cmap(image))
+        axes[m, 1].imshow(
+            mask_to_rgba(
+                zero_pad_mask(ground_truth[im_id], desired_size=image_size),
+                color=color,
+            ),
+            cmap=get_cmap(ground_truth),
+            alpha=alpha,
+        )
+        axes[m, 1].set_axis_off()
+        axes[m, 2].imshow(image[im_id], cmap=get_cmap(image))
+        axes[m, 2].imshow(
+            mask_to_rgba(
+                zero_pad_mask(mask1[im_id], desired_size=image_size), color=color,
+            ),
+            cmap=get_cmap(mask1),
+            alpha=alpha,
+        )
+        axes[m, 2].set_axis_off()
+        axes[m, 3].imshow(image[im_id], cmap=get_cmap(image))
+        axes[m, 3].imshow(
+            mask_to_rgba(
+                zero_pad_mask(mask2[im_id], desired_size=image_size), color=color,
+            ),
+            cmap=get_cmap(mask2),
+            alpha=alpha,
+        )
+        axes[m, 3].set_axis_off()
+        im_id += 1
+    if savefig is not None:
+        plt.tight_layout()
+        plt.savefig(savefig, dpi=300)
+    else:
+        plt.show()
+
+
 def zero_pad_mask(mask, desired_size):
     """[summary]
     

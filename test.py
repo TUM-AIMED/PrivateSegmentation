@@ -8,8 +8,10 @@ import configparser
 import argparse
 import albumentations as a
 from matplotlib import pyplot as plt
-from seaborn import violinplot, set_theme
-from pandas import DataFrame
+from pathlib import Path
+
+# from seaborn import violinplot, set_theme
+# from pandas import DataFrame
 from torchvision import datasets, transforms, models
 from argparse import Namespace
 from tqdm import tqdm
@@ -139,7 +141,7 @@ if __name__ == "__main__":
             ]
         )
         testset = MSD_data_images(
-            args.data_dir + "/test", transform=AlbumentationsTorchTransform(val_trans),
+            cmd_args.data_dir, transform=AlbumentationsTorchTransform(val_trans),
         )
     else:
         num_classes = 3
@@ -175,7 +177,7 @@ if __name__ == "__main__":
     test_loader = torch.utils.data.DataLoader(
         testset, batch_size=1, shuffle=True, **kwargs
     )
-    # args.model = "unet_mobilenet_v2"
+    # args.model = "unet_vgg11_bn"
     if args.model == "unet":
         warn(
             "Pure UNet is deprecated. Please specify backbone (unet_resnet18, unet_mobilenet_v2, unet_vgg11_bn)",
@@ -342,24 +344,43 @@ if __name__ == "__main__":
         ]
         iou = smp.utils.metrics.IoU()(total_pred, total_target)
         # fscore = smp.utils.metrics.Fscore()(total_pred, total_target)
+        test_results = Path("test_results")
+        test_results.mkdir(exist_ok=True)
+        file_path = (test_results / Path(cmd_args.model_weights).name).with_suffix(
+            ".npy"
+        )
+        np.save(file_path, np.asarray(scores))
         print(f"Dice Loss: {np.mean(losses)*100.0:.2f}%")
         print(f"Dice Score @ threshold {threshold}: {np.mean(scores)*100.0:.2f}%")
         print(f"IoU: {iou*100.0:.2f}%")
+
         # print(f"Fscore: {fscore*100.0:.2f}%")
 
-        interesting_idcs = np.argsort(
-            np.asarray(scores)
-        )  # could be more efficient using argpartition but this is simple and doesn't really matter for this number of array entries
-        interesting_idcs = np.concatenate([interesting_idcs[:5], interesting_idcs[-5:]])
+        # num_imgs = 2
+        # interesting_idcs = np.argsort(
+        #     np.asarray(scores)
+        # )  # could be more efficient using argpartition but this is simple and doesn't really matter for this number of array entries
+        # interesting_idcs = np.concatenate(
+        #     [interesting_idcs[: num_imgs // 2], interesting_idcs[-num_imgs // 2 :]]
+        # )
 
-        plot_imgs(
-            imgs[interesting_idcs],
-            total_target[interesting_idcs],
-            total_pred[interesting_idcs],
-            savefig="test.png",
+        torch.save(
+            {"imgs": imgs, "targets": total_target, "predictions": total_pred},
+            (Path("test_results") / Path(cmd_args.model_weights).name).with_suffix(
+                ".pt"
+            ),
         )
+        # plot_imgs(
+        #     imgs[interesting_idcs],
+        #     total_target[interesting_idcs],
+        #     total_pred[interesting_idcs],
+        #     savefig="test.png",
+        # )
 
         # plt.clf()
+        # plt.yscale("log", nonposy="clip")
+        # plt.hist(total_scores.numpy().flatten(), bins=100)
+        # plt.savefig("score_hist.png")
         # set_theme(style="whitegrid")
         # fig, ax = plt.subplots(figsize=(10, 5))
         # ax.set_ylim(-0.1, 1.1)
